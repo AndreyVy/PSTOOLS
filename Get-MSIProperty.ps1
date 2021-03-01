@@ -30,7 +30,7 @@ Function Get-MsiProps () {
     $PropertyTable = $null
     [System.Runtime.Interopservices.Marshal]::ReleaseComObject($WindowsInstaller) | Out-Null
     [System.GC]::Collect()
-    #[System.GC]::WaitForPendingFinalizers()
+    [System.GC]::WaitForPendingFinalizers()
 
     # return result as ps object
     New-Object -TypeName PSObject -Property $Props

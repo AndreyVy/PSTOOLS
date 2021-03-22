@@ -2,6 +2,7 @@ $ScriptTemplate = @'
 function Start-Application {
     <ENVVAR>
     <REG_ENTRY>
+    <SCRIPTS>
     Start-Process -FilePath "<PATHTOAPP>"<ARGS><WKDIR> -WindowStyle Normal
 }
 Start-Application
@@ -37,25 +38,44 @@ function ConvertFrom-ResExport {
     [CmdletBinding()]
     param([xml]$XmlData)
     $applications = $XmlData.respowerfuse.buildingblock.application
+    
+    $Workspaces = Get-Workspace -XmlData $XmlData
+
     foreach ($app in $applications) {
         $EnvVariables = [System.Collections.ArrayList]@()
         foreach ($variable in $app.powerlaunch.variable) {
-            $null = $EnvVariables.Add(@{"$($variable.name)" = "$($variable.value)" })   #   save as hashtable
+            $null = $EnvVariables.Add(
+            [PsCustomObject]@{
+                'Name' = "$($variable.name)"
+                'Value' = "$($variable.value)"
+                "Enabled" = "$($variable.enabled)"
+                'Workspace' = $Workspaces | Foreach-Object {if ($_.Guid -in $variable.workspacecontrol.workspace) {$_.Name}}
+            })   #   save as hashtable
             #$null = $EnvVariables.Add("$($variable.name)=$($variable.value)")          #   save as string 
         } # foreach $variable
         
         $ResScripts = [System.Collections.ArrayList]@()
         foreach ($script in $app.powerlaunch.exttask) {
-            $null = $ResScripts.Add(@{"$($script.Command)" = "$($script.script)" })     #   save as hashtable
+            $null = $ResScripts.Add(
+            [PsCustomObject]@{
+                'Command' = $script.Command
+                'Text' = $script.script
+                'Type' = $script.scriptext
+                'Enabled' = $script.enabled
+                'Workspace' = $Workspaces | Foreach-Object {if ($_.Guid -in $script.workspacecontrol.workspace) {$_.Name}}
+             })     #   save as object
             #$null = $ResScripts.Add("$($script.Command) = $($script.script)")          #   save as string 
         } # foreach $script
 
         $ResRegistry = [System.Collections.ArrayList]@()
         foreach ($regEntry in $app.powerlaunch.registry) {
-            $regText = [System.Text.Encoding]::ASCII.GetString(
-                [byte[]] -split ($regEntry.registryfile -replace '..', '0x$& ')
-            ) # GetString
-            $null = $ResRegistry.Add($regText)
+            $null = $ResRegistry.Add(
+                [PsCustomObject]@{
+                'regText' = [System.Text.Encoding]::ASCII.GetString( [byte[]] -split ($regEntry.registryfile -replace '..', '0x$& ') )
+                'Enabled' = $regEntry.enabled
+                'Workspace' = $Workspaces | Foreach-Object {if ($_.Guid -in $regEntry.workspacecontrol.workspace) {$_.Name}}
+                }
+            )
         } # foreach$regEntry
 
         $fta = [System.Collections.ArrayList]@()
@@ -107,7 +127,8 @@ function New-ShortcutScript {
 #>
     [CmdletBinding()]
     param(
-        [PsCustomObject]$ResObj
+        [PsCustomObject]$ResObj,
+        [switch]$PassThru
     )
     BEGIN {
         $null = New-Item "$PsScriptRoot\Output" -ItemType Directory -Force
@@ -116,20 +137,21 @@ function New-ShortcutScript {
     PROCESS {
         $ScriptTemplate = $script:ScriptTemplate
         $EnvVariableTemplate = $script:EnvVariableTemplate
-
         $FileName = "$PsScriptRoot\Output\$($ResObj.Name).ps1"
+        
         if (Test-Path $FileName) {
             $suffix = "_{0}" -f $((new-guid).guid).split('-') | Select-Object -First 1
             $FileName = "$PsScriptRoot\Output\$($ResObj.Name)$($suffix).ps1"
         }       
+        
         Write-Debug "Before ScriptBody"
         $ScriptBody = $ScriptTemplate.Replace('<PATHTOAPP>', $ResObj.Target)
         
         # insert arguments
         if ($ResObj.Arguments) {
             $AppArgs = " -ArgumentList `"$($ResObj.Arguments)`""
-        }
-        else { $AppArgs = '' }
+        } else { $AppArgs = '' }
+        
         $ScriptBody = $ScriptBody.Replace('<ARGS>', $AppArgs)
 
         # insert working directory
@@ -137,14 +159,25 @@ function New-ShortcutScript {
             $AppArgs = " -WorkingDirectory `"$($ResObj.WorkingDir)`""
         }
         else { $AppArgs = '' }
+        
         $ScriptBody = $ScriptBody.Replace('<WKDIR>', $AppArgs)
 
         # insert environment variables
         $varStr = ''
         if ($ResObj.Variables) {
+            
             foreach ($var in $ResObj.Variables) {
-                $varStr = "$varStr `n    @{'$($var.keys)' = '$($var.values)'},"
-            }
+                
+                $varStr = "$varStr `n    # Workspace:`t$($var.Workspace) "
+                
+                if ($var.Enabled -ne 'yes') {
+                    $strStart = '# '
+                    $varStr = "$varStr `n    # Variables were disabled!!! "
+                } else { $strStart = ''}
+
+                $varStr = "$varStr `n    ${strStart}@{'$($var.Name)' = '$($var.Value)'},"
+            } # foreach $var
+
             $varStr = $varStr.Remove($varStr.Length - 1)
             $varStr = $EnvVariableTemplate.Replace('<ENV_VAR_VALUES>', $varStr)
         }
@@ -153,13 +186,56 @@ function New-ShortcutScript {
         # insert registry
         $varStr = ''
         if ($ResObj.Registry) {
+            
             foreach ($RegEntry in $ResObj.Registry) {
-                $varStr = (ConvertFrom-RegToPS -RegData $RegEntry) -join "`n"
-            }
+                
+                $varStr = "$varStr `n`n    # Workspace:`t$($RegEntry.Workspace)"
+
+                if ($RegEntry.Enabled -ne 'yes') {
+                    $strStart = '# '
+                    $varStr = "$varStr `n    # Registry was disabled!!!"
+                } else { $strStart = ''}
+
+                foreach ($regString in (ConvertFrom-RegToPS -RegData $RegEntry.regText)) {
+                    $varStr = "$varStr `n    ${strStart}${regString}"
+                } # foreach $regString
+
+            } # foreach $RegEntry
         }
         $ScriptBody = $ScriptBody.Replace('<REG_ENTRY>', "$varStr`n")
 
+        # insert scripts
+        $varStr = ''
+        if ($ResObj.Scripts) {
+            
+            foreach ($script in $ResObj.Scripts) {
+                
+                $varStr = "$varStr `n`n    # Workspace`t$($script.Workspace)"
+                
+                if ($script.Enabled -ne 'yes') {
+                    $strStart = '# '
+                    $varStr = "$varStr `n    # Script was disabled!!!"
+                } else { $strStart = ''}
+
+                if (($script.Type -ne 'ps1')) {
+                    $strStart = '# '
+                }
+
+                $varStr = "$varStr `n    # Command:`t$($script.Command)"
+                
+                $lines = $script.Text -split "`n"
+                foreach ($scriptText in $lines) {
+                    $varStr = "$varStr `n    ${strStart}${scriptText}"
+                } #foreach $scriptText
+
+            } # foreach $ResScript
+        
+        } # if $ResObj.Scripts
+        
+        $ScriptBody = $ScriptBody.Replace('<SCRIPTS>', "$varStr`n")
         $null = New-Item -Path $FileName -ItemType File -Value $ScriptBody
+
+        if ($PassThru) { Write-Output $ResObj }
     } #PROCESS
     END {} #END
 } #function New-ShortcutScript
@@ -351,4 +427,20 @@ function ConvertFrom-RegToPS {
     Remove-PSDrive -Name HKCR
     Remove-PSDrive -Name HKU
     Remove-PSDrive -Name HKCC
+}
+
+function Get-Workspace {
+[CmdletBinding()]
+    param(
+        [xml]$XmlData
+    )
+    $workspaces = $XmlData.respowerfuse.buildingblock.workspaces.workspace
+    
+    foreach ($workspace in $workspaces) {
+        [PsCustomObject]@{
+            'Name' = $workspace.name
+            'Guid' = $workspace.guid
+            'Enabled'= $workspace.enabled
+        }
+    }
 }

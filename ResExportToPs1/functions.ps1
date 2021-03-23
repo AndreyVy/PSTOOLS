@@ -15,7 +15,7 @@ $EnvVariables = @(<ENV_VAR_VALUES>
 foreach ($EnvVariable in $EnvVariables) {
     [string]$EnvName = $EnvVariable.Keys
     [string]$EnvValue = $EnvVariable.Values
-    [System.Environment]::SetEnvironmentVariable($EnvVariable.Keys, $EnvValue, "User");
+    [System.Environment]::SetEnvironmentVariable($EnvVariable, $EnvValue, "User");
     [System.Environment]::SetEnvironmentVariable($EnvName, $EnvValue, "Process")
 }
 '@

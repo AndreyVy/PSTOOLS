@@ -164,7 +164,7 @@ foreach ($EnvVariable in $EnvVariables) {
                 # insert environment variables
                 if ($ResEntry.Variables) {
                     foreach ($var in $ResEntry.Variables) {
-                        $EnvVarCommand = "$EnvVarCommand `n    # Linked app Name:`t$($ResEntry.Name)`n    # Workspace:`t$($var.Workspace) "
+                        $EnvVarCommand = "$EnvVarCommand `n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($var.Workspace) "
                         if ($var.Enabled -ne 'yes') {
                             $strStart = '# '
                             $EnvVarCommand = "$EnvVarCommand `n    # Variables were disabled!!! "
@@ -177,7 +177,7 @@ foreach ($EnvVariable in $EnvVariables) {
                 # insert registry
                 if ($ResEntry.Registry) {
                     foreach ($RegEntry in $ResEntry.Registry) { 
-                        $RegistryCommand = "$RegistryCommand `n`n    # Linked app Name:`t$($ResEntry.Name)`n    # Workspace:`t$($RegEntry.Workspace)"
+                        $RegistryCommand = "$RegistryCommand `n`n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($RegEntry.Workspace)"
                         if ($RegEntry.Enabled -ne 'yes') {
                             $strStart = '# '
                             $RegistryCommand = "$RegistryCommand `n    # Registry was disabled!!!"
@@ -192,7 +192,7 @@ foreach ($EnvVariable in $EnvVariables) {
                 # insert scripts
                 if ($ResEntry.Scripts) {
                     foreach ($script in $ResEntry.Scripts) {
-                        $ScriptCommand = "$ScriptCommand `n`n    # Linked app Name:`t$($ResEntry.Name)`n    # Workspace:`t$($script.Workspace)"
+                        $ScriptCommand = "$ScriptCommand `n`n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($script.Workspace)"
                         if ($script.Enabled -ne 'yes') {
                             $strStart = '# '
                             $ScriptCommand = "$ScriptCommand `n    # Script was disabled!!!"

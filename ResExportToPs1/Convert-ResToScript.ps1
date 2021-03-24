@@ -172,6 +172,8 @@ foreach ($EnvVariable in $EnvVariables) {
                         else { $strStart = '' }
                         $EnvVarCommand = "$EnvVarCommand `n    ${strStart}@{'$($var.Name)' = '$($var.Value)'},"
                     } # foreach $var
+                    $EnvVarCommand = $EnvVarCommand.Remove($EnvVarCommand.Length - 1)
+                    $EnvVarCommand = $EnvVariableTemplate.Replace('<ENV_VAR_VALUES>', $EnvVarCommand)
                 }
 
                 # insert registry
@@ -210,8 +212,6 @@ foreach ($EnvVariable in $EnvVariables) {
                 } # if $ResEntry.Scripts
             } #foreach
 
-            $EnvVarCommand = $EnvVarCommand.Remove($EnvVarCommand.Length - 1)
-            $EnvVarCommand = $EnvVariableTemplate.Replace('<ENV_VAR_VALUES>', $EnvVarCommand)
             $ScriptBody = $ScriptBody.Replace('<ENVVAR>', $EnvVarCommand)
             $ScriptBody = $ScriptBody.Replace('<REG_ENTRY>', "$RegistryCommand`n")
             $ScriptBody = $ScriptBody.Replace('<SCRIPTS>', "$ScriptCommand`n")

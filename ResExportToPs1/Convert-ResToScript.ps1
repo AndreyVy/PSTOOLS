@@ -26,6 +26,7 @@ param(
         ValueFromPipelineByPropertyName = $true)]
     [ValidateScript( { Test-Path $_ })]
     [string[]]$FullName,
+    [string]$OutputDir = $PSScriptRoot,
     [switch]$OverWrite,
     [switch]$PassThru
 )
@@ -47,7 +48,7 @@ $EnvVariables = @(<ENV_VAR_VALUES>
 foreach ($EnvVariable in $EnvVariables) {
     [string]$EnvName = $EnvVariable.Keys
     [string]$EnvValue = $EnvVariable.Values
-    [System.Environment]::SetEnvironmentVariable($EnvVariable, $EnvValue, "User");
+    [System.Environment]::SetEnvironmentVariable($EnvName, $EnvValue, "User");
     [System.Environment]::SetEnvironmentVariable($EnvName, $EnvValue, "Process")
 }
 '@
@@ -135,7 +136,7 @@ foreach ($EnvVariable in $EnvVariables) {
         PROCESS {
             # detect res entry responsible for shortcut and create start process command
             $ResEntryPoint = $ResObject | Where-Object { $_.IsShortcut }
-            $FileName = "$PsScriptRoot\$($ResEntryPoint.Name).ps1"
+            $FileName = "$OutputDir\$($ResEntryPoint.Name).ps1"
 
             $ScriptTemplate = $script:ScriptTemplate
             $EnvVariableTemplate = $script:EnvVariableTemplate

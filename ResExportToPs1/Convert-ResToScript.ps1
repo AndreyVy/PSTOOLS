@@ -26,31 +26,22 @@ param(
         ValueFromPipelineByPropertyName = $true)]
     [ValidateScript( { Test-Path $_ })]
     [string[]]$FullName,
-    [string]$OutputDir = $PSScriptRoot,
-    [switch]$OverWrite,
+    [string]$OutputDir = "$PSScriptRoot\Scripts",
     [switch]$PassThru
 )
 BEGIN {
     $ScriptTemplate = @'
 function Start-Application {
+    <LINKEDAPPS>
     <ENVVAR>
     <REG_ENTRY>
     <SCRIPTS>
-    Start-Process -FilePath "<PATHTOAPP>"<ARGS><WKDIR> -WindowStyle Normal
+    <STARTAPP>
 }
 Start-Application
 '@
-
-    $EnvVariableTemplate = @'
-$EnvVariables = @(<ENV_VAR_VALUES>
-)
-
-foreach ($EnvVariable in $EnvVariables) {
-    [string]$EnvName = $EnvVariable.Keys
-    [string]$EnvValue = $EnvVariable.Values
-    [System.Environment]::SetEnvironmentVariable($EnvName, $EnvValue, "User");
-    [System.Environment]::SetEnvironmentVariable($EnvName, $EnvValue, "Process")
-}
+    $StartApp = @'
+    Start-Process -FilePath "<PATHTOAPP>"<ARGS><WKDIR> -WindowStyle Normal
 '@
     function ConvertFrom-ResExport {
         [CmdletBinding()]
@@ -58,8 +49,9 @@ foreach ($EnvVariable in $EnvVariables) {
         $applications = $XmlData.respowerfuse.buildingblock.application
     
         $Workspaces = Get-Workspace -XmlData $XmlData
-
+        
         foreach ($app in $applications) {
+            
             $EnvVariables = [System.Collections.ArrayList]@()
             foreach ($variable in $app.powerlaunch.variable) {
                 $null = $EnvVariables.Add(
@@ -69,7 +61,6 @@ foreach ($EnvVariable in $EnvVariables) {
                         "Enabled"   = "$($variable.enabled)"
                         'Workspace' = $Workspaces | Foreach-Object { if ($_.Guid -in $variable.workspacecontrol.workspace) { $_.Name } }
                     })   #   save as hashtable
-                #$null = $EnvVariables.Add("$($variable.name)=$($variable.value)")          #   save as string 
             } # foreach $variable
         
             $ResScripts = [System.Collections.ArrayList]@()
@@ -82,7 +73,6 @@ foreach ($EnvVariable in $EnvVariables) {
                         'Enabled'   = $script.enabled
                         'Workspace' = $Workspaces | Foreach-Object { if ($_.Guid -in $script.workspacecontrol.workspace) { $_.Name } }
                     })     #   save as object
-                #$null = $ResScripts.Add("$($script.Command) = $($script.script)")          #   save as string 
             } # foreach $script
 
             $ResRegistry = [System.Collections.ArrayList]@()
@@ -113,6 +103,14 @@ foreach ($EnvVariable in $EnvVariables) {
                 ) # add
             } #foreach extension
 
+            $LinkedApplications = [System.Collections.ArrayList]@()
+            $LinkedActions = $applications.powerlaunch.linked_actions
+            foreach ($LinkedActionGuid in $LinkedActions) {
+                $LinkedApplication = ( $applications | Where-Object { $_.guid -eq $LinkedActionGuid.linked_to_application } ).configuration.title
+                if ($LinkedApplication) {
+                    $null = $LinkedApplications.Add($LinkedApplication)
+                }
+            }
             [PsCustomObject][ordered]@{
                 'Name'        = $app.configuration.title
                 'Description' = $app.configuration.description
@@ -123,8 +121,9 @@ foreach ($EnvVariable in $EnvVariables) {
                 'Variables'   = $EnvVariables
                 'Registry'    = $ResRegistry
                 'FTA'         = $fta
-                'IsShortcut'  = $null -eq $app.required
+                'IsShortcut'  = '-' -ne "$($app.configuration.commandline)"
                 'ESNumber'    = $app.accesscontrol.grouplist.group.InnerText
+                'LinkedApps'  = $LinkedApplications
             } #hashtable output
         } # foreach $app
     } # end function
@@ -134,36 +133,40 @@ foreach ($EnvVariable in $EnvVariables) {
         param( [PsCustomObject]$ResObject )
         BEGIN { } #BEGIN
         PROCESS {
-            # detect res entry responsible for shortcut and create start process command
-            $ResEntryPoint = $ResObject | Where-Object { $_.IsShortcut }
-            $FileName = "$OutputDir\$($ResEntryPoint.Name).ps1"
-
             $ScriptTemplate = $script:ScriptTemplate
-            $EnvVariableTemplate = $script:EnvVariableTemplate
         
-            # insert executable
-            $ScriptBody = $ScriptTemplate.Replace('<PATHTOAPP>', $ResEntryPoint.Target)
-        
-            # insert arguments
-            if ($ResObject.Arguments) {
-                $AppArgs = " -ArgumentList `"$($ResEntryPoint.Arguments)`""
-            }
-            else { $AppArgs = '' }
-            $ScriptBody = $ScriptBody.Replace('<ARGS>', $AppArgs)
+            $Target = ''
+            $Arguments = ''
+            $WorkingDir = ''
 
-            # insert working directory
-            if ($ResObject.WorkingDir) {
-                $AppArgs = " -WorkingDirectory `"$($ResEntryPoint.WorkingDir)`""
-            }
-            else { $AppArgs = '' }
-            $ScriptBody = $ScriptBody.Replace('<WKDIR>', $AppArgs)
+            if ($ResObject.IsShortcut -eq $True) {
+                $Target = $ResObject.Target
+                $Arguments = $ResObject.Arguments
+                $WorkingDir = $ResObject.WorkingDir
+
+                # insert path to executable
+                $StartApp = $script:StartApp
+                $StartApp = $StartApp.Replace('<PATHTOAPP>', $Target)
+            
+                # insert arguments
+                if ($null -ne $ResObject.Arguments) {
+                    $AppArgs = " -ArgumentList `"$Arguments`""
+                }
+                else { $AppArgs = '' }
+                $StartApp = $StartApp.Replace('<ARGS>', $AppArgs)
+
+                # insert working directory
+                if ($null -ne $ResObject.WorkingDir) {
+                    $AppArgs = " -WorkingDirectory `"$WorkingDir`""
+                }
+                else { $AppArgs = '' }
+                $StartApp = $StartApp.Replace('<WKDIR>', $AppArgs)
+            } else {$StartApp  = ''}
 
             $EnvVarCommand = ''
-            $RegistryCommand = ''
-            $ScriptCommand = ''
             foreach ($ResEntry in $ResObject) {
                 # insert environment variables
-                if ($ResEntry.Variables) {
+                if ($null -ne $ResEntry.Variables) {
                     foreach ($var in $ResEntry.Variables) {
                         $EnvVarCommand = "$EnvVarCommand `n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($var.Workspace) "
                         if ($var.Enabled -ne 'yes') {
@@ -171,14 +174,17 @@ foreach ($EnvVariable in $EnvVariables) {
                             $EnvVarCommand = "$EnvVarCommand `n    # Variables were disabled!!! "
                         }
                         else { $strStart = '' }
-                        $EnvVarCommand = "$EnvVarCommand `n    ${strStart}@{'$($var.Name)' = '$($var.Value)'},"
+                        $EnvVarCommand = "$EnvVarCommand `n    ${strStart}`$EnvName  = '$($var.Name)'"
+                        $EnvVarCommand = "$EnvVarCommand `n    ${strStart}`$EnvValue = '$($var.Value)'"
+                        $EnvVarCommand = "$EnvVarCommand `n    ${strStart}[System.Environment]::SetEnvironmentVariable(`$EnvName, `$EnvValue, `"User`")"
+                        $EnvVarCommand = "$EnvVarCommand `n    ${strStart}[System.Environment]::SetEnvironmentVariable(`$EnvName, `$EnvValue, `"Process`")`n"
                     } # foreach $var
-                    $EnvVarCommand = $EnvVarCommand.Remove($EnvVarCommand.Length - 1)
-                    $EnvVarCommand = $EnvVariableTemplate.Replace('<ENV_VAR_VALUES>', $EnvVarCommand)
-                }
+                    $EnvVarCommand = "$EnvVarCommand`n"
+                } # if $ResEntry.Variables
 
+                $RegistryCommand = ''
                 # insert registry
-                if ($ResEntry.Registry) {
+                if ($null -ne $ResEntry.Registry) {
                     foreach ($RegEntry in $ResEntry.Registry) { 
                         $RegistryCommand = "$RegistryCommand `n`n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($RegEntry.Workspace)"
                         if ($RegEntry.Enabled -ne 'yes') {
@@ -190,12 +196,14 @@ foreach ($EnvVariable in $EnvVariables) {
                             $RegistryCommand = "$RegistryCommand `n    ${strStart}${regString}"
                         } # foreach $regString
                     } # foreach $RegEntry
-                }
-
+                    $RegistryCommand = "$RegistryCommand`n"
+                } #if $ResEntry
+                
+                $ScriptCommand = ''
                 # insert scripts
-                if ($ResEntry.Scripts) {
+                if ($null -ne $ResEntry.Scripts) {
                     foreach ($script in $ResEntry.Scripts) {
-                        $ScriptCommand = "$ScriptCommand `n`n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($script.Workspace)"
+                        $ScriptCommand = "$ScriptCommand `n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($script.Workspace)"
                         if ($script.Enabled -ne 'yes') {
                             $strStart = '# '
                             $ScriptCommand = "$ScriptCommand `n    # Script was disabled!!!"
@@ -210,18 +218,30 @@ foreach ($EnvVariable in $EnvVariables) {
                             $ScriptCommand = "$ScriptCommand `n    ${strStart}${scriptText}"
                         } #foreach $scriptText
                     } # foreach $ResScript
+                    $ScriptCommand = "$ScriptCommand`n"
                 } # if $ResEntry.Scripts
+
+                $LinkedScripts = ''
+                # insert linked actipns
+                if ($null -ne $ResEntry.LinkedApps) {
+                    foreach ($LinkedApp in $ResEntry.LinkedApps) { 
+                        $LinkedScripts = "$LinkedScripts `n    # Res App:`t`t$($ResEntry.Name)"
+                        $LinkedScripts = "$LinkedScripts `n    . '.\__$LinkedApp.ps1'`n"
+                        Write-Debug "Build string"
+                    } # foreach $LinkedApp
+                    $LinkedScripts = "$LinkedScripts`n"
+                } #if $ResEntry
+                
             } #foreach
 
-            $ScriptBody = $ScriptBody.Replace('<ENVVAR>', $EnvVarCommand)
-            $ScriptBody = $ScriptBody.Replace('<REG_ENTRY>', "$RegistryCommand`n")
-            $ScriptBody = $ScriptBody.Replace('<SCRIPTS>', "$ScriptCommand`n")
+            $ScriptBody = ''
             
-            $null = New-Item -Path $FileName -ItemType File -Value $ScriptBody -Force:$script:OverWrite
-            Write-Verbose "Result file:`t$FileName"
-            if ($script:PassThru) { 
-                $ResEntryPoint | Select-Object ESNumber, Name
-            }
+            $ScriptBody = $ScriptTemplate.Replace('<LINKEDAPPS>', $LinkedScripts)
+            $ScriptBody = $ScriptBody.Replace('<ENVVAR>', $EnvVarCommand)
+            $ScriptBody = $ScriptBody.Replace('<REG_ENTRY>', $RegistryCommand)
+            $ScriptBody = $ScriptBody.Replace('<SCRIPTS>', $ScriptCommand)
+            $ScriptBody = $ScriptBody.Replace('<STARTAPP>', $StartApp)
+            $ScriptBody
         } #PROCESS
         END { } #END
     } #function New-ShortcutScript
@@ -408,7 +428,29 @@ PROCESS {
         [xml]$BuildingBlock = Get-Content -Path $file
         $ResData = ConvertFrom-ResExport -XmlData $BuildingBlock
 	    
-        New-ShortcutScript -ResObject $ResData      
-    } #foreach
+        foreach ($ResObj in $ResData) {
+            $FileNamePrefix = ''
+            
+            if ($ResObj.IsShortcut -eq $false) {
+                $FileNamePrefix = '__'
+            }
+
+            $FileName = "$OutputDir\$FileNamePrefix$($ResObj.Name).ps1"
+            
+            if (Test-Path $FileName) {
+                Write-Verbose "Already exists: $FileName"
+                continue
+            }
+            
+            $ShortcutScript = New-ShortcutScript -ResObject $ResObj
+            $null = New-Item -Path $FileName -ItemType File -Value $ShortcutScript -Force
+            Write-Verbose "Result file:`t$FileName"
+
+            if ( $PassThru -and ($null -ne $_.ESNumber) ) { 
+                $ResObj | Select-Object ESNumber, Name
+            }
+
+        } #foreach $ResObj
+    } #foreach $file
 } #PROCESS
 END {}

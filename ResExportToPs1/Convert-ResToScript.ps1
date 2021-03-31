@@ -27,7 +27,8 @@ param(
     [ValidateScript( { Test-Path $_ })]
     [string[]]$FullName,
     [string]$OutputDir = "$PSScriptRoot\Scripts",
-    [switch]$PassThru
+    [switch]$PassThru,
+    [switch]$Force
 )
 BEGIN {
     $ScriptTemplate = @'
@@ -134,35 +135,17 @@ Start-Application
         BEGIN { } #BEGIN
         PROCESS {
             $ScriptTemplate = $script:ScriptTemplate
-        
-            $Target = ''
-            $Arguments = ''
-            $WorkingDir = ''
-
-            if ($ResObject.IsShortcut -eq $True) {
-                $Target = $ResObject.Target
-                $Arguments = $ResObject.Arguments
-                $WorkingDir = $ResObject.WorkingDir
-
-                # insert path to executable
-                $StartApp = $script:StartApp
-                $StartApp = $StartApp.Replace('<PATHTOAPP>', $Target)
+            $LinkedScripts = ''
+            # insert linked actipns
+            if ($null -ne $ResEntry.LinkedApps) {
+                foreach ($LinkedApp in $ResEntry.LinkedApps) { 
+                    $LinkedScripts = "$LinkedScripts `n    # Res App:`t`t$($ResEntry.Name)"
+                    $LinkedScripts = "$LinkedScripts `n    . '.\__$LinkedApp.ps1'`n"
+                    Write-Debug "Build string"
+                } # foreach $LinkedApp
+                $LinkedScripts = "$LinkedScripts`n"
+            } #if $ResEntry
             
-                # insert arguments
-                if ($null -ne $ResObject.Arguments) {
-                    $AppArgs = " -ArgumentList `"$Arguments`""
-                }
-                else { $AppArgs = '' }
-                $StartApp = $StartApp.Replace('<ARGS>', $AppArgs)
-
-                # insert working directory
-                if ($null -ne $ResObject.WorkingDir) {
-                    $AppArgs = " -WorkingDirectory `"$WorkingDir`""
-                }
-                else { $AppArgs = '' }
-                $StartApp = $StartApp.Replace('<WKDIR>', $AppArgs)
-            } else {$StartApp  = ''}
-
             $EnvVarCommand = ''
             foreach ($ResEntry in $ResObject) {
                 # insert environment variables
@@ -203,7 +186,7 @@ Start-Application
                 # insert scripts
                 if ($null -ne $ResEntry.Scripts) {
                     foreach ($script in $ResEntry.Scripts) {
-                        $ScriptCommand = "$ScriptCommand `n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($script.Workspace)"
+                        $ScriptCommand = "$ScriptCommand `n`n`n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($script.Workspace)"
                         if ($script.Enabled -ne 'yes') {
                             $strStart = '# '
                             $ScriptCommand = "$ScriptCommand `n    # Script was disabled!!!"
@@ -221,17 +204,33 @@ Start-Application
                     $ScriptCommand = "$ScriptCommand`n"
                 } # if $ResEntry.Scripts
 
-                $LinkedScripts = ''
-                # insert linked actipns
-                if ($null -ne $ResEntry.LinkedApps) {
-                    foreach ($LinkedApp in $ResEntry.LinkedApps) { 
-                        $LinkedScripts = "$LinkedScripts `n    # Res App:`t`t$($ResEntry.Name)"
-                        $LinkedScripts = "$LinkedScripts `n    . '.\__$LinkedApp.ps1'`n"
-                        Write-Debug "Build string"
-                    } # foreach $LinkedApp
-                    $LinkedScripts = "$LinkedScripts`n"
-                } #if $ResEntry
+                $Target = ''
+                $Arguments = ''
+                $WorkingDir = ''
+    
+                if ($ResObject.IsShortcut -eq $True) {
+                    $Target = $ResObject.Target
+                    $Arguments = $ResObject.Arguments
+                    $WorkingDir = $ResObject.WorkingDir
+    
+                    # insert path to executable
+                    $StartApp = $script:StartApp
+                    $StartApp = $StartApp.Replace('<PATHTOAPP>', $Target)
                 
+                    # insert arguments
+                    if ('' -ne $ResObject.Arguments) {
+                        $AppArgs = " -ArgumentList `"$Arguments`""
+                    }
+                    else { $AppArgs = '' }
+                    $StartApp = $StartApp.Replace('<ARGS>', $AppArgs)
+    
+                    # insert working directory
+                    if ('' -ne $ResObject.WorkingDir) {
+                        $AppArgs = " -WorkingDirectory `"$WorkingDir`""
+                    }
+                    else { $AppArgs = '' }
+                    $StartApp = $StartApp.Replace('<WKDIR>', $AppArgs)
+                } else {$StartApp  = ''}
             } #foreach
 
             $ScriptBody = ''
@@ -437,13 +436,13 @@ PROCESS {
 
             $FileName = "$OutputDir\$FileNamePrefix$($ResObj.Name).ps1"
             
-            if (Test-Path $FileName) {
+            if ( (Test-Path $FileName) -and !$Force) {
                 Write-Verbose "Already exists: $FileName"
                 continue
             }
             
             $ShortcutScript = New-ShortcutScript -ResObject $ResObj
-            $null = New-Item -Path $FileName -ItemType File -Value $ShortcutScript -Force
+            $null = New-Item -Path $FileName -ItemType File -Value $ShortcutScript -Force:$Force
             Write-Verbose "Result file:`t$FileName"
 
             if ( $PassThru -and ($null -ne $_.ESNumber) ) { 

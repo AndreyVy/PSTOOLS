@@ -105,7 +105,7 @@ Start-Application
             } #foreach extension
 
             $LinkedApplications = [System.Collections.ArrayList]@()
-            $LinkedActions = $applications.powerlaunch.linked_actions
+            $LinkedActions = $app.powerlaunch.linked_actions
             foreach ($LinkedActionGuid in $LinkedActions) {
                 $LinkedApplication = ( $applications | Where-Object { $_.guid -eq $LinkedActionGuid.linked_to_application } ).configuration.title
                 if ($LinkedApplication) {
@@ -145,7 +145,7 @@ Start-Application
                 if ($null -ne $ResEntry.LinkedApps) {
                     foreach ($LinkedApp in $ResEntry.LinkedApps) { 
                         $LinkedScripts = "$LinkedScripts `n    # Res App:`t`t$($ResEntry.Name)"
-                        $LinkedScripts = "$LinkedScripts `n    . '.\__$LinkedApp.ps1'`n"
+                        $LinkedScripts = "$LinkedScripts `n    . `"`$PsScriptRoot\__$LinkedApp.ps1`"`n"
                     } # foreach $LinkedApp
                     $LinkedScripts = "$LinkedScripts`n"
                 } #if $ResEntry

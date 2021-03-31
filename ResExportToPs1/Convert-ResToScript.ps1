@@ -141,7 +141,7 @@ Start-Application
             foreach ($ResEntry in $ResObject) {
                 
                 # insert linked actipns
-
+                $LinkedScripts=''
                 if ($null -ne $ResEntry.LinkedApps) {
                     foreach ($LinkedApp in $ResEntry.LinkedApps) { 
                         $LinkedScripts = "$LinkedScripts `n    # Res App:`t`t$($ResEntry.Name)"

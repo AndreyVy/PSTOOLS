@@ -135,20 +135,23 @@ Start-Application
         BEGIN { } #BEGIN
         PROCESS {
             $ScriptTemplate = $script:ScriptTemplate
-            $LinkedScripts = ''
-            # insert linked actipns
-            if ($null -ne $ResEntry.LinkedApps) {
-                foreach ($LinkedApp in $ResEntry.LinkedApps) { 
-                    $LinkedScripts = "$LinkedScripts `n    # Res App:`t`t$($ResEntry.Name)"
-                    $LinkedScripts = "$LinkedScripts `n    . '.\__$LinkedApp.ps1'`n"
-                    Write-Debug "Build string"
-                } # foreach $LinkedApp
-                $LinkedScripts = "$LinkedScripts`n"
-            } #if $ResEntry
             
-            $EnvVarCommand = ''
+            
+            
             foreach ($ResEntry in $ResObject) {
+                
+                # insert linked actipns
+
+                if ($null -ne $ResEntry.LinkedApps) {
+                    foreach ($LinkedApp in $ResEntry.LinkedApps) { 
+                        $LinkedScripts = "$LinkedScripts `n    # Res App:`t`t$($ResEntry.Name)"
+                        $LinkedScripts = "$LinkedScripts `n    . '.\__$LinkedApp.ps1'`n"
+                    } # foreach $LinkedApp
+                    $LinkedScripts = "$LinkedScripts`n"
+                } #if $ResEntry
+                
                 # insert environment variables
+                $EnvVarCommand = ''
                 if ($null -ne $ResEntry.Variables) {
                     foreach ($var in $ResEntry.Variables) {
                         $EnvVarCommand = "$EnvVarCommand `n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($var.Workspace) "
@@ -165,8 +168,8 @@ Start-Application
                     $EnvVarCommand = "$EnvVarCommand`n"
                 } # if $ResEntry.Variables
 
-                $RegistryCommand = ''
                 # insert registry
+                $RegistryCommand = ''
                 if ($null -ne $ResEntry.Registry) {
                     foreach ($RegEntry in $ResEntry.Registry) { 
                         $RegistryCommand = "$RegistryCommand `n`n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($RegEntry.Workspace)"
@@ -182,8 +185,8 @@ Start-Application
                     $RegistryCommand = "$RegistryCommand`n"
                 } #if $ResEntry
                 
-                $ScriptCommand = ''
                 # insert scripts
+                $ScriptCommand = ''
                 if ($null -ne $ResEntry.Scripts) {
                     foreach ($script in $ResEntry.Scripts) {
                         $ScriptCommand = "$ScriptCommand `n`n`n    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($script.Workspace)"

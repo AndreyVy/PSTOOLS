@@ -46,7 +46,6 @@ $LinkedScriptTemplate = @'
     <ENVVAR>
     <REG_ENTRY>
     <SCRIPTS>
-    <STARTAPP>
 '@
     $StartApp = @'
     Start-Process -FilePath "<PATHTOAPP>"<ARGS><WKDIR> -WindowStyle Normal

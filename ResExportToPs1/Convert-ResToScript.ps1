@@ -41,6 +41,13 @@ function Start-Application {
 }
 Start-Application
 '@
+$LinkedScriptTemplate = @'
+    <LINKEDAPPS>
+    <ENVVAR>
+    <REG_ENTRY>
+    <SCRIPTS>
+    <STARTAPP>
+'@
     $StartApp = @'
     Start-Process -FilePath "<PATHTOAPP>"<ARGS><WKDIR> -WindowStyle Normal
 '@
@@ -135,11 +142,10 @@ Start-Application
         BEGIN { } #BEGIN
         PROCESS {
             $ScriptTemplate = $script:ScriptTemplate
-            
-            
-            
+            $LinkedScriptTemplate = $script:LinkedScriptTemplate
+
             foreach ($ResEntry in $ResObject) {
-                
+
                 # insert linked actipns
                 $LinkedScripts=''
                 if ($null -ne $ResEntry.LinkedApps) {
@@ -149,7 +155,7 @@ Start-Application
                     } # foreach $LinkedApp
                     $LinkedScripts = "$LinkedScripts`n"
                 } #if $ResEntry
-                
+
                 # insert environment variables
                 $EnvVarCommand = ''
                 if ($null -ne $ResEntry.Variables) {
@@ -233,16 +239,20 @@ Start-Application
                     }
                     else { $AppArgs = '' }
                     $StartApp = $StartApp.Replace('<WKDIR>', $AppArgs)
-                } else {$StartApp  = ''}
+                    
+                    $ScriptBody = $ScriptTemplate
+                    $ScriptBody = $ScriptBody.Replace('<STARTAPP>', $StartApp)
+                } 
+                else {
+                    $ScriptBody = $LinkedScriptTemplate
+                }
             } #foreach
 
-            $ScriptBody = ''
-            
-            $ScriptBody = $ScriptTemplate.Replace('<LINKEDAPPS>', $LinkedScripts)
+            $ScriptBody = $ScriptBody.Replace('<LINKEDAPPS>', $LinkedScripts)
             $ScriptBody = $ScriptBody.Replace('<ENVVAR>', $EnvVarCommand)
             $ScriptBody = $ScriptBody.Replace('<REG_ENTRY>', $RegistryCommand)
             $ScriptBody = $ScriptBody.Replace('<SCRIPTS>', $ScriptCommand)
-            $ScriptBody = $ScriptBody.Replace('<STARTAPP>', $StartApp)
+
             $ScriptBody
         } #PROCESS
         END { } #END

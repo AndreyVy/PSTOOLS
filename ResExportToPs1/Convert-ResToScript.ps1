@@ -21,12 +21,11 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true,
-        ValueFromPipeline = $true,
-        ValueFromPipelineByPropertyName = $true)]
-    [ValidateScript( { Test-Path $_ })]
-    [string[]]$FullName,
-    [string]$OutputDir = "$PSScriptRoot\Scripts",
+    [Parameter( Mandatory = $true,
+                ValueFromPipeline = $true)]
+    [string[]]$Path,
+    [System.IO.FileInfo]$InputObject,
+    [string]$OutputDir = "$PWD\Scripts",
     [switch]$PassThru,
     [switch]$Force
 )
@@ -54,10 +53,11 @@ $LinkedScriptTemplate = @'
         [CmdletBinding()]
         param([xml]$XmlData)
         $applications = $XmlData.respowerfuse.buildingblock.application
+        $logonactions = $XmlData.respowerfuse.buildingblock
     
         $Workspaces = Get-Workspace -XmlData $XmlData
         
-        foreach ($app in $applications) {
+        foreach ($app in $applications, $logonactions) {
             
             $EnvVariables = [System.Collections.ArrayList]@()
             foreach ($variable in $app.powerlaunch.variable) {
@@ -91,7 +91,7 @@ $LinkedScriptTemplate = @'
                         'Workspace' = $Workspaces | Foreach-Object { if ($_.Guid -in $regEntry.workspacecontrol.workspace) { $_.Name } }
                     }
                 )
-            } # foreach$regEntry
+            } # foreach $regEntry
 
             $fta = [System.Collections.ArrayList]@()
             foreach ($extension in $app.instantfileassociations.association) {
@@ -434,11 +434,18 @@ $LinkedScriptTemplate = @'
     }
 }
 PROCESS {
-    foreach ($file in $FullName) {
+    foreach ($file in $Path) {
+        
+        # adopt pipeline support and enable relative path support
+        if ($file -is 'Io.FileInfo') { $file = $file.FullName }
+        $file = (resolve-path -Path $file).Path
+
         Write-Verbose "Parse file $file"
         [xml]$BuildingBlock = Get-Content -Path $file
         $ResData = ConvertFrom-ResExport -XmlData $BuildingBlock
 	    
+        if (Test-Path $OutputDir) {} else { $null = New-Item -Path $OutputDir -ItemType Directory }
+
         foreach ($ResObj in $ResData) {
             $FileNamePrefix = ''
             
@@ -452,8 +459,9 @@ PROCESS {
                 Write-Verbose "Already exists: $FileName"
                 continue
             }
-            
+        
             $ShortcutScript = New-ShortcutScript -ResObject $ResObj
+
             $null = New-Item -Path $FileName -ItemType File -Value $ShortcutScript -Force:$Force
             Write-Verbose "Result file:`t$FileName"
 

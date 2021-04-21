@@ -4,14 +4,23 @@
 .DESCRIPTION
     Creates one script per application (xml may contain several apps). Generates code for
         - Application start
-        - Registry add
-        - Environment variables add
+        - Registry
+        - Environment variables
+        - Scripts
+        - Linked actions
+    By default, output is saved to <CURRENT CONSOLE WORKING DIRECTORY>\Scripts.
 .EXAMPLE
-    .\Start.ps1 -FullName "C:\data\start_schlumberger_olga 2017.2.0_olga 2017.2.0.xml"
-    Creates .\Output directory and save ps1 scripts there. 
+    PS C:\Temp> C:\Scripts\Convert-ResToScript.ps1 -Path "C:\data\start_schlumberger_olga 2017.2.0_olga 2017.2.0.xml"
+    Creates C:\Temp\Scripts directory and save ps1 scripts there. If C:\Temp\Scripts already has ps1-files with app
+    names, script will generate error.
 .EXAMPLE
-    dir C:\data *.xml | .\Start.ps1 -Verbose
-    Creates .\Output directory and creates ps1 scripts for each applications from xml files in C:\data directory
+    PS C:\Temp> C:\Scripts\Convert-ResToScript.ps1 -Path "C:\data\start_schlumberger_olga 2017.2.0_olga 2017.2.0.xml" -Force
+    Do the same as previous example.
+    If C:\Temp\Scripts already contains scripts from previous launches, they will be overwritten
+.EXAMPLE
+    dir C:\data *.xml | .\Convert-ResToScript.ps1 -OutputDir C:\Results -Verbose
+    Creates C:\Results directory and save ps1 scripts for each applications described in xml files from C:\data directory
+    Console will contain verbose information 
 .INPUTS
     Inputs (if any)
 .OUTPUTS

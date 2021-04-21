@@ -22,11 +22,20 @@
     Creates C:\Results directory and save ps1 scripts for each applications described in xml files from C:\data directory
     Console will contain verbose information 
 .INPUTS
-    Inputs (if any)
+    XML file exported from RES
 .OUTPUTS
-    Output (if any)
+    PowerShell script
 .NOTES
-    General notes
+    Version 2.2
+        * Script adjusted to work with logon actions
+        * removed undesired blank lines
+        * added additional info about to each res object (name or description)
+        *changed default output dir to current working directory. See examples
+    TO-DO:
+    - web links
+    - Folder Redirections
+    - mapping
+    - embeddedpolicies
 #>
 [CmdletBinding()]
 param(

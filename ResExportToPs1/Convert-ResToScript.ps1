@@ -26,6 +26,15 @@
 .OUTPUTS
     PowerShell script
 .NOTES
+    Version 2.3
+        * fix bug for Path parameter with Resolve-Path
+        * Resolve dos-style %variables%
+        * Add information about disabled shortcuts: by Disable option, by StartMenu item option
+        * Add partial information about access groups and users
+        * Add actions on app close
+        * Change info appearance: additional comments will be added to result script if requested info has
+          non-default values. For example, if workspace was not set, result script will not have workspace
+          comment at all. If workspace has specific value, script will have workspace comment with value
     Version 2.2
         * Script adjusted to work with logon actions
         * removed undesired blank lines
@@ -39,10 +48,8 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter( Mandatory = $true,
-                ValueFromPipeline = $true)]
-    [string[]]$Path,
-    [System.IO.FileInfo]$InputObject,
+    [Parameter( Mandatory = $true, ValueFromPipeline = $true)]
+    $Path,
     [string]$OutputDir = "$PWD\Scripts",
     [switch]$PassThru,
     [switch]$Force
@@ -50,12 +57,12 @@ param(
 BEGIN {
     $ScriptTemplate = @'
 function Start-Application {
-<LINKEDAPPS><ENVVAR><REG_ENTRY><SCRIPTS><STARTAPP>
+<INFO><LINKEDAPPS><ENVVAR><REG_ENTRY><SCRIPTS><STARTAPP>
 }
 Start-Application
 '@
 $LinkedScriptTemplate = @'
-<LINKEDAPPS><ENVVAR><REG_ENTRY><SCRIPTS>
+<INFO><LINKEDAPPS><ENVVAR><REG_ENTRY><SCRIPTS>
 '@
     $StartApp = @'
     Start-Process -FilePath "<PATHTOAPP>"<ARGS><WKDIR> -WindowStyle Normal
@@ -88,6 +95,19 @@ $LinkedScriptTemplate = @'
             $ResScripts = [System.Collections.ArrayList]@()
             foreach ($script in $app.powerlaunch.exttask) {
                 $null = $ResScripts.Add(
+                    [PsCustomObject]@{
+                        'Name'      = $script.description
+                        'Command'   = $script.Command
+                        'Text'      = $script.script
+                        'Type'      = $script.scriptext
+                        'Enabled'   = $script.enabled
+                        'Workspace' = $Workspaces | Foreach-Object { if ($_.Guid -in $script.workspacecontrol.workspace) { $_.Name } }
+                    })     #   save as object
+            } # foreach $script
+
+            $OnCloseScripts = [System.Collections.ArrayList]@()
+            foreach ($script in $app.powerlaunch.exttaskex) {
+                $null = $OnCloseScripts.Add(
                     [PsCustomObject]@{
                         'Name'      = $script.description
                         'Command'   = $script.Command
@@ -134,20 +154,52 @@ $LinkedScriptTemplate = @'
                 if ($LinkedApplication) {
                     $null = $LinkedApplications.Add($LinkedApplication)
                 }
+            } # foreach LinkedActionGuid
+
+            $AccessList = [System.Collections.ArrayList]@()
+            $AccessControl = $app.accesscontrol
+            if ($AccessControl.accesstype -eq 'group') { 
+                foreach ($group in $AccessControl.grouplist.group) {
+                    $gtype = $group.type
+                    $gname = $group.InnerText
+                    $null = $AccessList.Add("TYPE=$gtype NAME=$gname")
+                }
+                foreach ($group in $AccessControl.notgrouplist.group) {
+                    $gtype = $group.type
+                    $gname = $group.InnerText
+                    $AccessList.Add("NOT TYPE=$gtype NAME=$gname")
+                }
+             }
+
+            if ($null -ne $AccessControl.access.type) { $null = $AccessList.Add($AccessControl.access.type) }
+            
+            if ($null -ne $AccessControl.access) {
+                foreach ($subnode in $AccessControl.access) {
+                    $option = $subnode.options
+                    $type = $subnode.type
+                    $object = $subnode.object
+                    $AccessList.Add("OPTION: $option TYPE: $type OBJECT: $object")
+                }
             }
+
+
             [PsCustomObject][ordered]@{
-                'Name'        = $app.configuration.title
-                'Description' = $app.configuration.description
-                'Target'      = $app.configuration.commandline
-                'Arguments'   = $app.configuration.parameters
-                'WorkingDir'  = $app.configuration.workingdir
-                'Scripts'     = $ResScripts
-                'Variables'   = $EnvVariables
-                'Registry'    = $ResRegistry
-                'FTA'         = $fta
-                'IsShortcut'  = ( '-' -ne "$($app.configuration.commandline)" ) -and ( $null -ne $($app.configuration) )
-                'ESNumber'    = $app.accesscontrol.grouplist.group.InnerText
-                'LinkedApps'  = $LinkedApplications
+                'Name'          = $app.configuration.title
+                'Description'   = $app.configuration.description
+                'Target'        = $app.configuration.commandline
+                'Arguments'     = $app.configuration.parameters
+                'WorkingDir'    = $app.configuration.workingdir
+                'Scripts'       = $ResScripts
+                'CloseScripts'  = $OnCloseScripts
+                'Variables'     = $EnvVariables
+                'Registry'      = $ResRegistry
+                'FTA'           = $fta
+                'IsShortcut'    = ( '-' -ne "$($app.configuration.commandline)" ) -and ( $null -ne $($app.configuration) )
+                'ESNumber'      = $app.accesscontrol.grouplist.group.InnerText
+                'LinkedApps'    = $LinkedApplications
+                'InStartMenu'   = $app.configuration.createmenushortcut
+                'IsEnabled'     = $app.settings.enabled
+                'AccessInfo'    = $AccessList
             } #hashtable output
         } # foreach $app
     } # end function
@@ -161,83 +213,19 @@ $LinkedScriptTemplate = @'
             $LinkedScriptTemplate = $script:LinkedScriptTemplate
 
             foreach ($ResEntry in $ResObject) {
-
-                # insert linked actipns
-                $LinkedScripts=''
-                if ($null -ne $($ResEntry.LinkedApps)) {
-                    foreach ($LinkedApp in $ResEntry.LinkedApps) { 
-                        $LinkedScripts = "$LinkedScripts    # Res App:`t`t$($ResEntry.Name)`n"
-                        $LinkedScripts = "$LinkedScripts    . `"`$PsScriptRoot\__$LinkedApp.ps1`"`n`n"
-                    } # foreach $LinkedApp
-                    $LinkedScripts = "$LinkedScripts`n"
-                } #if $ResEntry
-
-                # insert environment variables
-                $EnvVarCommand = ''
-                if ($null -ne $($ResEntry.Variables)) {
-                    foreach ($var in $ResEntry.Variables) {
-                        $EnvVarCommand = "$EnvVarCommand    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($var.Workspace)`n    # Name :`t`t$($var.Name)`n"
-                        if ($var.Enabled -ne 'yes') {
-                            $strStart = '# '
-                            $EnvVarCommand = "$EnvVarCommand    # Variables were disabled!!! `n"
-                        }
-                        else { $strStart = '' }
-                        $EnvVarCommand = "$EnvVarCommand    ${strStart}`$EnvName  = '$($var.Name)' `n"
-                        $EnvVarCommand = "$EnvVarCommand    ${strStart}`$EnvValue = '$($var.Value)' `n"
-                        $EnvVarCommand = "$EnvVarCommand    ${strStart}[System.Environment]::SetEnvironmentVariable(`$EnvName, `$EnvValue, `"User`") `n"
-                        $EnvVarCommand = "$EnvVarCommand    ${strStart}[System.Environment]::SetEnvironmentVariable(`$EnvName, `$EnvValue, `"Process`")`n"
-                        $EnvVarCommand = "$EnvVarCommand`n"
-                    } # foreach $var
-                } # if $ResEntry.Variables
-
-                # insert registry
-                $RegistryCommand = ''
-                if ($null -ne $($ResEntry.Registry)) {
-                    foreach ($RegEntry in $ResEntry.Registry) { 
-                        $RegistryCommand = "$RegistryCommand    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($RegEntry.Workspace)`n    # Name :`t`t$($RegEntry.name)`n"
-                        if ($RegEntry.Enabled -ne 'yes') {
-                            $strStart = '# '
-                            $RegistryCommand = "$RegistryCommand    # Registry was disabled!!! `n"
-                        }
-                        else { $strStart = '' }
-                        foreach ($regString in (ConvertFrom-RegToPS -RegData $RegEntry.regText)) {
-                            $RegistryCommand = "$RegistryCommand    ${strStart}${regString} `n"
-                        } # foreach $regString
-                        $RegistryCommand = "$RegistryCommand`n"
-                    } # foreach $RegEntry
-                } #if $ResEntry
-                
-                # insert scripts
-                $ScriptCommand = ''
-                if ($null -ne $($ResEntry.Scripts)) {
-                    foreach ($script in $ResEntry.Scripts) {
-                        $ScriptCommand = "$ScriptCommand    # Res App:`t`t$($ResEntry.Name)`n    # Workspace:`t$($script.Workspace)`n    # Name :`t`t$($script.name)`n"
-                        if ($script.Enabled -ne 'yes') {
-                            $strStart = '# '
-                            $ScriptCommand = "$ScriptCommand    # Script was disabled!!! `n"
-                        }
-                        else { $strStart = '' }
-                        if (($script.Type -ne 'ps1')) {
-                            $strStart = '# '
-                        }
-                        $ScriptCommand = "$ScriptCommand    # Command:`t`t$($script.Command) `n"  
-                        $lines = $script.Text -split "`n"
-                        foreach ($scriptText in $lines) {
-                            $ScriptCommand = "$ScriptCommand    ${strStart}${scriptText} `n"
-                        } #foreach $scriptText
-                        $ScriptCommand = "$ScriptCommand`n"
-                    } # foreach $ResScript
-                } # if $ResEntry.Scripts
-
                 $Target = ''
                 $Arguments = ''
                 $WorkingDir = ''
-    
+                $AppInfo = ''
                 if ($ResObject.IsShortcut -eq $True) {
-                    $Target = $ResObject.Target
-                    $Arguments = $ResObject.Arguments
-                    $WorkingDir = $ResObject.WorkingDir
-    
+                    
+                    if (($ResEntry.InStartMenu -eq 'no') -or ($ResEntry.IsEnabled -eq 'no')) {
+                        $AppInfo += "    # StartMenu shortcut was disabled!!!`n"
+                    }
+
+                    $Target = [system.environment]::ExpandEnvironmentVariables("$($ResObject.Target)")
+                    $Arguments = [system.environment]::ExpandEnvironmentVariables("$($ResObject.Arguments)")
+                    $WorkingDir = [system.environment]::ExpandEnvironmentVariables("$($ResObject.WorkingDir)")
                     # insert path to executable
                     $StartApp = $script:StartApp
                     $StartApp = $StartApp.Replace('<PATHTOAPP>', $Target)
@@ -262,8 +250,121 @@ $LinkedScriptTemplate = @'
                 else {
                     $ScriptBody = $LinkedScriptTemplate
                 }
-            } #foreach
 
+                # insert info
+                foreach ($AccessInfo in $ResEntry.AccessInfo) {
+                    $AppInfo += "    # $AccessInfo`n"
+                }
+                
+                # insert linked actipns
+                $LinkedScripts=''
+                if ($null -ne $($ResEntry.LinkedApps)) {
+                    foreach ($LinkedApp in $ResEntry.LinkedApps) { 
+                        $LinkedScripts += "    . `"`$PsScriptRoot\__$LinkedApp.ps1`"`n`n"
+                    } # foreach $LinkedApp
+                    $LinkedScripts = "$LinkedScripts`n"
+                } #if $ResEntry
+
+                # insert environment variables
+                $EnvVarCommand = ''
+                if ($null -ne $($ResEntry.Variables)) {
+                    foreach ($var in $ResEntry.Variables) {
+                        
+                        if ($null -ne $var.Workspace) { $WorkspaceText = "    # Workspace:`t$($var.Workspace)`n"}
+                        else { $WorkspaceText = ''}
+
+                        if ($null -ne $var.description) { $DescriptionText = "    # Description:`t$($var.description)`n"}
+                        else { $DescriptionText = ''}
+                        
+                        $EnvVarCommand = $EnvVarCommand + $WorkspaceText + $DescriptionText
+                        
+                        if ($var.Enabled -ne 'yes') {
+                            $strStart = '# '
+                            $EnvVarCommand += "    # Environment variable was disabled!!! `n"
+                        }
+                        else { $strStart = '' }
+                        
+                        $EnvVarCommand += "    ${strStart}`$EnvName  = '$($var.Name)' `n"
+                        $EnvVarCommand += "    ${strStart}`$EnvValue = '$($var.Value)' `n"
+                        $EnvVarCommand += "    ${strStart}[System.Environment]::SetEnvironmentVariable(`$EnvName, `$EnvValue, `"User`") `n"
+                        $EnvVarCommand += "    ${strStart}[System.Environment]::SetEnvironmentVariable(`$EnvName, `$EnvValue, `"Process`")`n"
+                        $EnvVarCommand = "$EnvVarCommand`n"
+                    } # foreach $var
+                } # if $ResEntry.Variables
+
+                # insert registry
+                $RegistryCommand = ''
+                if ($null -ne $($ResEntry.Registry)) {
+                    foreach ($RegEntry in $ResEntry.Registry) { 
+                        
+                        if ($null -ne $RegEntry.Workspace) { $WorkspaceText = "    # Workspace:`t$($RegEntry.Workspace)`n"}
+                        else { $WorkspaceText = ''}
+
+                        if ($null -ne $RegEntry.name) { $DescriptionText = "    # Name :`t`t$($RegEntry.name)`n" }
+                        else {$DescriptionText = ''}
+
+                        $RegistryCommand = $RegistryCommand + $WorkspaceText + $DescriptionText
+                        if ($RegEntry.Enabled -ne 'yes') {
+                            $strStart = '# '
+                            $RegistryCommand += "    # Registry was disabled!!! `n"
+                        }
+                        else { $strStart = '' }
+                        foreach ($regString in (ConvertFrom-RegToPS -RegData $RegEntry.regText)) {
+                            $RegistryCommand += "    ${strStart}${regString} `n"
+                        } # foreach $regString
+                        $RegistryCommand = "$RegistryCommand`n"
+                    } # foreach $RegEntry
+                } #if $ResEntry
+                
+                # insert scripts
+                
+                function _buildResScript {
+                    param($script)
+                    
+                    $ScriptCommand =''
+
+                    if ($null -ne $script.Workspace) { $WorkspaceText = "    # Workspace:`t$($script.Workspace)`n"}
+                    else { $WorkspaceText = ''}
+
+                    if ($null -ne $script.name) { $DescriptionText = "    # Name :`t`t$($script.name)`n" }
+                    else {$DescriptionText = ''}
+
+                    $ScriptCommand += $WorkspaceText + $DescriptionText
+                    if ($script.Enabled -ne 'yes') {
+                        $strStart = '# '
+                        $ScriptCommand += "    # Script was disabled!!!`n"
+                    }
+                    else { $strStart = '' }
+                    if (($script.Type -ne 'ps1')) {
+                        $strStart = '# '
+                    }
+                    $ScriptCommand += "    # Command:`t`t$($script.Command) `n"  
+                    $lines = $script.Text -split "`n"
+                    foreach ($scriptText in $lines) {
+                        $ScriptCommand += "    ${strStart}${scriptText} `n"
+                    } #foreach $scriptText
+                    $ScriptCommand
+                }
+
+                $ScriptCommand = ''
+                if ($null -ne $($ResEntry.Scripts)) {
+                    foreach ($script in $ResEntry.Scripts) {
+                        $ScriptCommand += _buildResScript -script $script
+                        $ScriptCommand = "$ScriptCommand`n"
+                    } # foreach $ResScript
+                } # if $ResEntry.Scripts
+
+                if ($null -ne $($ResEntry.CloseScripts)) {
+                    foreach ($script in $ResEntry.CloseScripts) {
+                        $ScriptCommand += "    # Action on app close!!!`n"
+                        $ScriptCommand += _buildResScript -script $script
+                        $ScriptCommand = "$ScriptCommand`n"
+                    } # foreach $ResScript
+                } # if $ResEntry.Scripts
+
+            } #foreach ResEntry
+
+            $ScriptBody = $ScriptBody.Replace('<INFO>', $AppInfo)
             $ScriptBody = $ScriptBody.Replace('<LINKEDAPPS>', $LinkedScripts)
             $ScriptBody = $ScriptBody.Replace('<ENVVAR>', $EnvVarCommand)
             $ScriptBody = $ScriptBody.Replace('<REG_ENTRY>', $RegistryCommand)
@@ -452,7 +553,6 @@ $LinkedScriptTemplate = @'
 }
 PROCESS {
     foreach ($file in $Path) {
-        
         # adopt pipeline support and enable relative path support
         if ($file -is 'Io.FileInfo') { $file = $file.FullName }
         $file = (resolve-path -Path $file).Path

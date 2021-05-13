@@ -410,7 +410,7 @@ $LinkedScriptTemplate = @'
         foreach ($line in $RegStrings) {
             if ($line.Length -gt 0) {
                 # current line has comment
-                if ($line -match '(^;)|(^Windows Registry Editor)' ) {
+                if ($line -match '(^;)|(^Windows Registry Editor)|(^""$)' ) {
                     Continue;
                 }
                 # currrent line is a registry key            

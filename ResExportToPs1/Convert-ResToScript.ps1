@@ -181,12 +181,32 @@ function ConvertResExport {
             }
         } # foreach LinkedActionGuid
 
+        $Target = $app.configuration.commandline
+        $Arguments = $app.configuration.parameters
+        $WorkingDir = $app.configuration.workingdir
+
+        # recognize start of another RES application
+        if ($Target -eq '%respfdir%\pwrgate.exe') {
+            
+            Write-Verbose 'RES <commandline> setting has pwrgate.exe as target. The shortcuts call for another RES application'
+            
+            $ResAppId = $Arguments -split ' ' | Select-Object -First 1
+            if ($ResAppId -notmatch '[^0-9]') {
+                
+                Write-Warning "Called application has id $ResAppId in RES database"
+                
+                $Target = ($Arguments -split ' ' | Select-Object -Skip 1) -join ''
+                $Arguments = ''
+                $WorkingDir = ''
+            }
+        }
+
         [PsCustomObject][ordered]@{
             'Name'         = $app.configuration.title
             'Description'  = $app.configuration.description
-            'Target'       = $app.configuration.commandline
-            'Arguments'    = $app.configuration.parameters
-            'WorkingDir'   = $app.configuration.workingdir
+            'Target'       = $Target
+            'Arguments'    = $Arguments
+            'WorkingDir'   = $WorkingDir
             'Scripts'      = $ResScripts
             'CloseScripts' = $OnCloseScripts
             'Variables'    = $EnvVariables

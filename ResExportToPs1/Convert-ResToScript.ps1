@@ -26,6 +26,8 @@
 .OUTPUTS
     PowerShell script
 .NOTES
+    Version 2.5
+        * Recognize start of another RES application
     Version 2.4
         * Info about RES shortcut permissions moved on top of the script. Example:
                 # user GCLOUD\boa
@@ -61,7 +63,6 @@
         * added additional info about to each res object (name or description)
         *changed default output dir to current working directory. See examples
     TO-DO:
-    - web links
     - Folder Redirections
     - mapping
     - embeddedpolicies

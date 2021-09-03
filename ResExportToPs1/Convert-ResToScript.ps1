@@ -385,7 +385,7 @@ function ConvertRegToScript {
     Remove-PSDrive -Name HKCC
 } # function ConvertRegToScript
 
-ffunction GetWorkspaces {
+function GetWorkspaces {
     [CmdletBinding()]
     param(
         [xml]$XmlData

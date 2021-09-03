@@ -26,7 +26,9 @@
 .OUTPUTS
     PowerShell script
 .NOTES
-    Version 2.5
+    Version 2.6
+		* Fix issue when logon scripts and apps are stored in one file
+	Version 2.5
         * Recognize start of another RES application
     Version 2.4
         * Info about RES shortcut permissions moved on top of the script. Example:
@@ -97,130 +99,130 @@ function ConvertResExport {
     $applications = $XmlData.respowerfuse.buildingblock.application
         
     # logon actions do not have application tag
-    if ($null -eq $applications) {
-        $applications = $XmlData.respowerfuse.buildingblock
-    }
+    $logonactions = $XmlData.respowerfuse.buildingblock
         
-    foreach ($app in $applications) {
+    foreach ($resitem in @($applications, $logonactions)) {
+        foreach ($app in $resitem) {
+                
+            $EnvVariables = [System.Collections.ArrayList]@()
+            foreach ($variable in $app.powerlaunch.variable) {
+                $null = $EnvVariables.Add(
+                    [PsCustomObject]@{
+                        'Name'       = "$($variable.name)"
+                        'Value'      = "$($variable.value)"
+                        'Enabled'    = "$($variable.enabled)"
+                        'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $variable.workspacecontrol.workspace) { $_.Name } }
+                        'AccessInfo' = GetAccessControls -Target $variable
+                    })   #   save as hashtable
+            } # foreach $variable
             
-        $EnvVariables = [System.Collections.ArrayList]@()
-        foreach ($variable in $app.powerlaunch.variable) {
-            $null = $EnvVariables.Add(
-                [PsCustomObject]@{
-                    'Name'       = "$($variable.name)"
-                    'Value'      = "$($variable.value)"
-                    'Enabled'    = "$($variable.enabled)"
-                    'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $variable.workspacecontrol.workspace) { $_.Name } }
-                    'AccessInfo' = GetAccessControls -Target $variable
-                })   #   save as hashtable
-        } # foreach $variable
-        
-        $ResScripts = [System.Collections.ArrayList]@()
-        foreach ($script in $app.powerlaunch.exttask) {
-            $null = $ResScripts.Add(
-                [PsCustomObject]@{
-                    'Name'       = $script.description
-                    'Command'    = $script.Command
-                    'Text'       = $script.script
-                    'Type'       = $script.scriptext
-                    'Enabled'    = $script.enabled
-                    'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $script.workspacecontrol.workspace) { $_.Name } }
-                    'AccessInfo' = GetAccessControls -Target $script
-                })     #   save as object
-        } # foreach $script
+            $ResScripts = [System.Collections.ArrayList]@()
+            foreach ($script in $app.powerlaunch.exttask) {
+                $null = $ResScripts.Add(
+                    [PsCustomObject]@{
+                        'Name'       = $script.description
+                        'Command'    = $script.Command
+                        'Text'       = $script.script
+                        'Type'       = $script.scriptext
+                        'Enabled'    = $script.enabled
+                        'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $script.workspacecontrol.workspace) { $_.Name } }
+                        'AccessInfo' = GetAccessControls -Target $script
+                    })     #   save as object
+            } # foreach $script
 
-        $OnCloseScripts = [System.Collections.ArrayList]@()
-        foreach ($script in $app.powerlaunch.exttaskex) {
-            $null = $OnCloseScripts.Add(
-                [PsCustomObject]@{
-                    'Name'       = $script.description
-                    'Command'    = $script.Command
-                    'Text'       = $script.script
-                    'Type'       = $script.scriptext
-                    'Enabled'    = $script.enabled
-                    'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $script.workspacecontrol.workspace) { $_.Name } }
-                    'AccessInfo' = GetAccessControls -Target $script
-                })     #   save as object
-        } # foreach $script
+            $OnCloseScripts = [System.Collections.ArrayList]@()
+            foreach ($script in $app.powerlaunch.exttaskex) {
+                $null = $OnCloseScripts.Add(
+                    [PsCustomObject]@{
+                        'Name'       = $script.description
+                        'Command'    = $script.Command
+                        'Text'       = $script.script
+                        'Type'       = $script.scriptext
+                        'Enabled'    = $script.enabled
+                        'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $script.workspacecontrol.workspace) { $_.Name } }
+                        'AccessInfo' = GetAccessControls -Target $script
+                    })     #   save as object
+            } # foreach $script
 
-        $ResRegistry = [System.Collections.ArrayList]@()
-        foreach ($regEntry in $app.powerlaunch.registry) {
-            $null = $ResRegistry.Add(
-                [PsCustomObject]@{
-                    'Name'       = $regEntry.name
-                    'regText'    = [System.Text.Encoding]::ASCII.GetString( [byte[]] -split ($regEntry.registryfile -replace '..', '0x$& ') )
-                    'Enabled'    = $regEntry.enabled
-                    'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $regEntry.workspacecontrol.workspace) { $_.Name } }
-                    'AccessInfo' = GetAccessControls -Target $regEntry
+            $ResRegistry = [System.Collections.ArrayList]@()
+            foreach ($regEntry in $app.powerlaunch.registry) {
+                $null = $ResRegistry.Add(
+                    [PsCustomObject]@{
+                        'Name'       = $regEntry.name
+                        'regText'    = [System.Text.Encoding]::ASCII.GetString( [byte[]] -split ($regEntry.registryfile -replace '..', '0x$& ') )
+                        'Enabled'    = $regEntry.enabled
+                        'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $regEntry.workspacecontrol.workspace) { $_.Name } }
+                        'AccessInfo' = GetAccessControls -Target $regEntry
+                    }
+                )
+            } # foreach $regEntry
+
+            $fta = [System.Collections.ArrayList]@()
+            foreach ($extension in $app.instantfileassociations.association) {
+                $null = $fta.Add(
+                    @{
+                        'extension'       = $extension.extension
+                        'command'         = $extension.command
+                        'parameters'      = $extension.parameters
+                        'description'     = $extension.description
+                        'dde_enabled'     = $extension.dde_enabled
+                        'dde_message'     = $extension.dde_message
+                        'dde_application' = $extension.dde_application
+                        'dde_topic'       = $extension.dde_topic
+                        'dde_ifexec'      = $extension.dde_ifexec
+                    } #hashtable fta
+                ) # add
+            } #foreach extension
+
+            $LinkedApplications = [System.Collections.ArrayList]@()
+            $LinkedActions = $app.powerlaunch.linked_actions
+            foreach ($LinkedActionGuid in $LinkedActions) {
+                $LinkedApplication = ( $applications | Where-Object { $_.guid -eq $LinkedActionGuid.linked_to_application } ).configuration.title
+                if ($LinkedApplication) {
+                    $null = $LinkedApplications.Add($LinkedApplication)
                 }
-            )
-        } # foreach $regEntry
+            } # foreach LinkedActionGuid
 
-        $fta = [System.Collections.ArrayList]@()
-        foreach ($extension in $app.instantfileassociations.association) {
-            $null = $fta.Add(
-                @{
-                    'extension'       = $extension.extension
-                    'command'         = $extension.command
-                    'parameters'      = $extension.parameters
-                    'description'     = $extension.description
-                    'dde_enabled'     = $extension.dde_enabled
-                    'dde_message'     = $extension.dde_message
-                    'dde_application' = $extension.dde_application
-                    'dde_topic'       = $extension.dde_topic
-                    'dde_ifexec'      = $extension.dde_ifexec
-                } #hashtable fta
-            ) # add
-        } #foreach extension
+            $Target = $app.configuration.commandline
+            $Arguments = $app.configuration.parameters
+            $WorkingDir = $app.configuration.workingdir
 
-        $LinkedApplications = [System.Collections.ArrayList]@()
-        $LinkedActions = $app.powerlaunch.linked_actions
-        foreach ($LinkedActionGuid in $LinkedActions) {
-            $LinkedApplication = ( $applications | Where-Object { $_.guid -eq $LinkedActionGuid.linked_to_application } ).configuration.title
-            if ($LinkedApplication) {
-                $null = $LinkedApplications.Add($LinkedApplication)
-            }
-        } # foreach LinkedActionGuid
-
-        $Target = $app.configuration.commandline
-        $Arguments = $app.configuration.parameters
-        $WorkingDir = $app.configuration.workingdir
-
-        # recognize start of another RES application
-        if ($Target -eq '%respfdir%\pwrgate.exe') {
-            
-            Write-Verbose 'RES <commandline> setting has pwrgate.exe as target. The shortcuts call for another RES application'
-            
-            $ResAppId = $Arguments -split ' ' | Select-Object -First 1
-            if ($ResAppId -notmatch '[^0-9]') {
+            # recognize start of another RES application
+            if ($Target -eq '%respfdir%\pwrgate.exe') {
                 
-                Write-Warning "Called application has id $ResAppId in RES database"
+                Write-Verbose 'RES <commandline> setting has pwrgate.exe as target. The shortcuts call for another RES application'
                 
-                $Target = ($Arguments -split ' ' | Select-Object -Skip 1) -join ''
-                $Arguments = ''
-                $WorkingDir = ''
+                $ResAppId = $Arguments -split ' ' | Select-Object -First 1
+                if ($ResAppId -notmatch '[^0-9]') {
+                    
+                    Write-Warning "Called application has id $ResAppId in RES database"
+                    
+                    $Target = ($Arguments -split ' ' | Select-Object -Skip 1) -join ''
+                    $Arguments = ''
+                    $WorkingDir = ''
+                }
             }
-        }
 
-        [PsCustomObject][ordered]@{
-            'Name'         = $app.configuration.title
-            'Description'  = $app.configuration.description
-            'Target'       = $Target
-            'Arguments'    = $Arguments
-            'WorkingDir'   = $WorkingDir
-            'Scripts'      = $ResScripts
-            'CloseScripts' = $OnCloseScripts
-            'Variables'    = $EnvVariables
-            'Registry'     = $ResRegistry
-            'FTA'          = $fta
-            'IsShortcut'   = ( '-' -ne "$($app.configuration.commandline)" ) -and ( $null -ne $($app.configuration) )
-            'ESNumber'     = $app.accesscontrol.grouplist.group.InnerText
-            'LinkedApps'   = $LinkedApplications
-            'InStartMenu'  = $app.configuration.createmenushortcut
-            'IsEnabled'    = $app.settings.enabled
-            'AccessInfo'   = GetAccessControls -Target $app
-        } #hashtable output
-    } # foreach $app
+            [PsCustomObject][ordered]@{
+                'Name'         = $app.configuration.title
+                'Description'  = $app.configuration.description
+                'Target'       = $Target
+                'Arguments'    = $Arguments
+                'WorkingDir'   = $WorkingDir
+                'Scripts'      = $ResScripts
+                'CloseScripts' = $OnCloseScripts
+                'Variables'    = $EnvVariables
+                'Registry'     = $ResRegistry
+                'FTA'          = $fta
+                'IsShortcut'   = ( '-' -ne "$($app.configuration.commandline)" ) -and ( $null -ne $($app.configuration) )
+                'ESNumber'     = $app.accesscontrol.grouplist.group.InnerText
+                'LinkedApps'   = $LinkedApplications
+                'InStartMenu'  = $app.configuration.createmenushortcut
+                'IsEnabled'    = $app.settings.enabled
+                'AccessInfo'   = GetAccessControls -Target $app
+            } #hashtable output
+        } # foreach $app
+    } # foreach $resitem
 } # function ConvertResExport
 
 function ConvertRegToScript {
@@ -383,7 +385,7 @@ function ConvertRegToScript {
     Remove-PSDrive -Name HKCC
 } # function ConvertRegToScript
 
-function GetWorkspaces {
+ffunction GetWorkspaces {
     [CmdletBinding()]
     param(
         [xml]$XmlData
@@ -662,46 +664,48 @@ function MakeShortcutScript {
 }
 PROCESS {
 foreach ($file in $Path) {
-    # enable relative path support
-    if ($file -is 'Io.FileInfo') { $file = $file.FullName }
-    $file = (resolve-path -Path $file).Path
+		# enable relative path support
+		if ($file -is 'Io.FileInfo') { $file = $file.FullName }
+		$file = (resolve-path -Path $file).Path
 
-    Write-Verbose "Parse file $file"
-    [xml]$BuildingBlock = Get-Content -Path $file
-    
-    $Workspaces = GetWorkspaces -XmlData $BuildingBlock
-    $PowerZones = GetPowerzones -XmlData $BuildingBlock
-    $ResData = ConvertResExport -XmlData $BuildingBlock
-        
-    if (Test-Path $OutputDir) {} else { $null = New-Item -Path $OutputDir -ItemType Directory }
+		Write-Verbose "Parse file $file"
+		[xml]$BuildingBlock = Get-Content -Path $file
+		
+		$Workspaces = GetWorkspaces -XmlData $BuildingBlock
+		$PowerZones = GetPowerzones -XmlData $BuildingBlock
+		$ResData = ConvertResExport -XmlData $BuildingBlock
+			
+		if (Test-Path $OutputDir) {} else { $null = New-Item -Path $OutputDir -ItemType Directory }
 
-    foreach ($ResObj in $ResData) {
-        $FileNamePrefix = ''
-            
-        if ($ResObj.IsShortcut -eq $false) {
-            $FileNamePrefix = '__'
-        }
+		foreach ($ResObj in $ResData) {
+			$FileNamePrefix = ''
+				
+			if ($ResObj.IsShortcut -eq $false) {
+				$FileNamePrefix = '__'
+			}
 
-        if ($null -eq $ResObj.Name) {
-            $FileName = (Get-Item $file).BaseName
-        }
-        else { $FileName = $ResObj.Name }
-        $FileName = "$OutputDir\$FileNamePrefix$FileName.ps1"
-            
-        if ( (Test-Path $FileName) -and !$Force) {
-            Write-Verbose "Already exists: $FileName"
-            continue
-        }
-        
-        $ShortcutScript = MakeShortcutScript -ResObject $ResObj
+			if ($null -eq $ResObj.Name) {
+				$FileName = (Get-Item $file).BaseName
+			}
+			else { $FileName = $ResObj.Name }
+			$FileName = "$FileNamePrefix$FileName.ps1"
+            $FilePath = "$OutputDir\$FileName"
+				
+			if ( (Test-Path $FilePath) -and !$Force) {
+				
+                Write-Verbose "${FileName}:`tFile already exists"
+				continue
+			}
+			
+			$ShortcutScript = MakeShortcutScript -ResObject $ResObj
 
-        $null = New-Item -Path $FileName -ItemType File -Value $ShortcutScript -Force:$Force
-        Write-Verbose "Result file: $FileName"
+			$null = New-Item -Path $FilePath -ItemType File -Value $ShortcutScript -Force:$Force
+			Write-Verbose "${FileName}:`tNew script was created"
 
-        if ( $PassThru -and ($null -ne $_.ESNumber) ) { 
-            $ResObj | Select-Object ESNumber, Name
-        }
-    } #foreach $ResObj
-} #foreach $file
+			if ( $PassThru -and ($null -ne $_.ESNumber) ) { 
+				$ResObj | Select-Object ESNumber, Name
+			}
+		} #foreach $ResObj
+	} #foreach $file
 }
 END{}

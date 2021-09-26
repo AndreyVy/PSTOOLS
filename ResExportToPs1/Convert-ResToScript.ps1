@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Converts RES export to PowerShell
 .DESCRIPTION
@@ -10,23 +10,40 @@
         - Linked actions
     By default, output is saved to <CURRENT CONSOLE WORKING DIRECTORY>\Scripts.
 .EXAMPLE
-    PS C:\Temp> C:\Scripts\Convert-ResToScript.ps1 -Path "C:\data\start_schlumberger_olga 2017.2.0_olga 2017.2.0.xml"
-    Creates C:\Temp\Scripts directory and save ps1 scripts there. If C:\Temp\Scripts already has ps1-files with app
-    names, script will generate error.
+    PS C:\Temp> Convert-ResToScript -Path "C:\data\start_schlumberger_olga 2017.2.0_olga 2017.2.0.xml"
+    Creates C:\Temp\Scripts directory and save ps1 scripts there. Return PsCustomObject with properties from RES application
 .EXAMPLE
-    PS C:\Temp> C:\Scripts\Convert-ResToScript.ps1 -Path "C:\data\start_schlumberger_olga 2017.2.0_olga 2017.2.0.xml" -Force
-    Do the same as previous example.
-    If C:\Temp\Scripts already contains scripts from previous launches, they will be overwritten
+    PS C:\Temp> Convert-ResToScript -Path "C:\data\start_schlumberger_olga 2017.2.0_olga 2017.2.0.xml" -Force
+    Creates C:\Temp\Scripts directory and save ps1 scripts there. If C:\Temp\Scripts already contains scripts with app names, they will be overwritten. Return PsCustomObject with properties from RES application
 .EXAMPLE
-    dir C:\data *.xml | .\Convert-ResToScript.ps1 -OutputDir C:\Results -Verbose
-    Creates C:\Results directory and save ps1 scripts for each applications described in xml files from C:\data directory
-    Console will contain verbose information 
+    dir C:\data *.xml | Convert-ResToScript -OutputDir C:\Results -Silent
+    Creates C:\Results directory and save ps1 scripts for each applications described in xml files from C:\data directory. Silent switch suppress object return
 .INPUTS
     XML file exported from RES
 .OUTPUTS
     PowerShell script
+	PsCustomObject
 .NOTES
-    Version 2.7
+    Version 2.8
+		* Update function that convert reg data to PowerShell commands
+		* Replace PassThru argument with silent. By default, function returns information for farther processing
+		  Silent switch disables this behavior. Only errors and warning will be displayed.
+		* Add default output as object which stores RES information as properties:
+			'Description'  = RES App Name
+			'Target'       = Path to application
+			'Arguments'    = Application start arguments
+			'WorkingDir'   = Application start working directory
+			'Scripts'      = Scripts which executed before application start
+			'CloseScripts' = Scripts which executed after application close
+			'Variables'    = Environment variables
+			'Registry'     = Windows registry
+			'FTA'          = assigned file associations
+			'IsShortcut'   = (bool) indicate that RES App is shortcut
+			'LinkedApps'   = List of linked RES Apps
+			'InStartMenu'  = (bool) indicate that RES App has start menu
+			'IsEnabled'    = (bool) indicate that RES App is enabled
+			'AccessInfo'   = AD groups and users assigned on RES App
+	Version 2.7
 		* Fix fantom linked scripts
 		* Fix empty scripts from empty res instances
 		* code refactoring
@@ -78,7 +95,7 @@ param(
     [Parameter( Mandatory = $true, ValueFromPipeline = $true)]
     $Path,
     [string]$OutputDir = "$PWD\Scripts",
-    [switch]$PassThru,
+    [switch]$Silent,
     [switch]$Force
 )
 BEGIN{
@@ -97,20 +114,21 @@ $StartApp = @'
     Start-Process -FilePath "<PATHTOAPP>"<ARGS><WKDIR> -WindowStyle Normal
 '@
 
-function ConvertResExport {
+function _convertXmlToObj {
     [CmdletBinding()]
     param([xml]$XmlData)
     $ResObjects = [System.Collections.ArrayList]@()
 
+	# add aplications
 	if ( $null -ne $XmlData.respowerfuse.buildingblock.application ) {
 		$applications = $XmlData.respowerfuse.buildingblock.application
-		# add all aplications to parse list
 		foreach ($application in $applications) {
 			$null = $ResObjects.Add($application)
 		}
 	}
+
+	# add logon actions
 	if ( $null -ne $XmlData.respowerfuse.buildingblock.powerlaunch ) {
-		# add all logon actions to parse list
 		$logonactions = $XmlData.respowerfuse.buildingblock.powerlaunch
 		foreach ($logonaction in $logonactions) {
 			$null = $ResObjects.Add($logonaction)
@@ -118,11 +136,10 @@ function ConvertResExport {
 		$logonactions = $null
 	}
 
-	foreach ($resobject in $ResObjects) {   
+	foreach ($resobject in $ResObjects) {
 		# detect app and logon actions
-		if ( $resobject.Name -eq 'application') {
-			Write-Verbose "RES application was detected"
-			# collect shortcut options
+		$app = if ( $resobject.Name -eq 'application') {
+			# collect shortcut settings
 			$Target					= $resobject.configuration.commandline
 			$Arguments				= $resobject.configuration.parameters
 			$WorkingDir				= $resobject.configuration.workingdir
@@ -130,18 +147,17 @@ function ConvertResExport {
 			$Description			= $resobject.configuration.description
 			$CommandLine			= $resobject.configuration.commandline
 			$Configuration			= $resobject.configuration
-			$ESNumber				= $resobject.accesscontrol.grouplist.group.InnerText
 			$CreateMenuShortcut		= $resobject.configuration.createmenushortcut
 			$IsEnabled				= $resobject.settings.enabled
-			$AccessInfo				= GetAccessControls -Target $resobject
-			
+			$AccessInfo				= _getAccessControl -Target $resobject
+
 			Write-Verbose "RES application $Name was detected"
-			
+
 			# collect apps ftas
 			$fta = [System.Collections.ArrayList]@()
 			foreach ($extension in $resobject.instantfileassociations.association) {
 				$null = $fta.Add(
-					@{
+					[PsCustomObject]@{
 						'extension'       = $extension.extension
 						'command'         = $extension.command
 						'parameters'      = $extension.parameters
@@ -154,14 +170,14 @@ function ConvertResExport {
 					} #hashtable fta
 				) # add
 			} #foreach extension
-			
-			$app = $resobject.powerlaunch
+
+			Write-Output $resobject.powerlaunch
 		}
 		else {
 			Write-Verbose "At-logon action was detected"
-			$app = $resobject
+			Write-Output $resobject
 		}
-		
+
 		# Collect environment variables
 		$EnvVariables = [System.Collections.ArrayList]@()
 		foreach ($variable in $app.variable) {
@@ -171,10 +187,10 @@ function ConvertResExport {
 					'Value'      = "$($variable.value)"
 					'Enabled'    = "$($variable.enabled)"
 					'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $variable.workspacecontrol.workspace) { $_.Name } }
-					'AccessInfo' = GetAccessControls -Target $variable
+					'AccessInfo' = _getAccessControl -Target $variable
 				})   #   save as hashtable
 		} # foreach $variable
-		
+
 		# Collect on-start scripts and commands
 		$ResScripts = [System.Collections.ArrayList]@()
 		foreach ($script in $app.exttask) {
@@ -186,7 +202,7 @@ function ConvertResExport {
 					'Type'       = $script.scriptext
 					'Enabled'    = $script.enabled
 					'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $script.workspacecontrol.workspace) { $_.Name } }
-					'AccessInfo' = GetAccessControls -Target $script
+					'AccessInfo' = _getAccessControl -Target $script
 				})     #   save as object
 		} # foreach $script
 
@@ -201,11 +217,11 @@ function ConvertResExport {
 					'Type'       = $script.scriptext
 					'Enabled'    = $script.enabled
 					'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $script.workspacecontrol.workspace) { $_.Name } }
-					'AccessInfo' = GetAccessControls -Target $script
+					'AccessInfo' = _getAccessControl -Target $script
 				})     #   save as object
 		} # foreach $script
 
-		# collect registry 
+		# collect registry
 		$ResRegistry = [System.Collections.ArrayList]@()
 		foreach ($regEntry in $app.registry) {
 			$null = $ResRegistry.Add(
@@ -214,7 +230,7 @@ function ConvertResExport {
 					'regText'    = [System.Text.Encoding]::ASCII.GetString( [byte[]] -split ($regEntry.registryfile -replace '..', '0x$& ') )
 					'Enabled'    = $regEntry.enabled
 					'Workspace'  = $Workspaces | Foreach-Object { if ($_.Guid -in $regEntry.workspacecontrol.workspace) { $_.Name } }
-					'AccessInfo' = GetAccessControls -Target $regEntry
+					'AccessInfo' = _getAccessControl -Target $regEntry
 				}
 			)
 		} # foreach $regEntry
@@ -231,14 +247,14 @@ function ConvertResExport {
 
 		# recognize start of another RES application
 		if ($Target -eq '%respfdir%\pwrgate.exe') {
-			
+
 			Write-Warning 'RES <commandline> setting has pwrgate.exe as target. The shortcuts call for another RES application'
-			
+
 			$ResAppId = $Arguments -split ' ' | Select-Object -First 1
 			if ($ResAppId -notmatch '[^0-9]') {
-				
+
 				Write-Warning "Called application has id $ResAppId in RES database"
-				
+
 				$Target = ($Arguments -split ' ' | Select-Object -Skip 1) -join ''
 				$Arguments = ''
 				$WorkingDir = ''
@@ -257,214 +273,230 @@ function ConvertResExport {
 			'Registry'     = $ResRegistry
 			'FTA'          = $fta
 			'IsShortcut'   = ( '-' -ne "$CommandLine" ) -and ( $null -ne $Configuration )
-			'ESNumber'     = $ESNumber
 			'LinkedApps'   = $LinkedApplications
 			'InStartMenu'  = $CreateMenuShortcut
 			'IsEnabled'    = $IsEnabled
 			'AccessInfo'   = $AccessInfo
 		} #hashtable output
 	} # foreach $app
-} # function ConvertResExport
+} # function _convertXmlToObj
 
-function ConvertRegToScript {
-    [CmdLetBinding()]
-    Param(
-        [Parameter(Mandatory = $true)]
-        [string]$RegData
-    )
-    $RegistryTypes = @{ "string" = "String";
-        "hex"                    = "Binary";
-        "dword"                  = "DWord";
-        "hex(b)"                 = "QWord";
-        "hex(7)"                 = "MultiString";
-        "hex(2)"                 = "ExpandString";
-        "hex(0)"                 = "Unknown"
-    }
-    $RegistryHives = @{ "HKEY_LOCAL_MACHINE\\" = "HKLM:";
-        "HKEY_CURRENT_USER\\"                  = "HKCU:";
-        "HKEY_CLASSES_ROOT\\"                  = "HKCR:";
-        "HKEY_USERS\\"                         = "HKU:";
-        "HKEY_CURRENT_CONFIG\\"                = "HKCC:"
-    }
-    $key = ""
-    $name = ""
-    $value = ""
-    $type = ""
-    $curvalue = ""
-    $code = [System.Collections.ArrayList]@()
+function Convert-RegToScript {
+<#
+.Synopsis
+   Convert .reg file to PowerShell native code.
+.AUTHOR
+   Oleksandr Sobakar 24.09.2019
+   Oleksandr Sobakar 20.12.2020
+.VERSION
+   1.0 - initial
+   2.0 - new feature: supports removing keys and names like using reg.exe
+         major bags fixed: error if name contains some symbols ("[","]","/","=")
+         minor bugs fixed
+         new approach in output Powershell code
+.DESCRIPTION
+   This script converts .reg file into native PowerShell code, allowing to save time on creating, maintaining and updating code.
+   Required Parameter -FilePath - path to .reg file.
+   Only native code is produced, no functions.
+   If registry key does not exist - script creates it.
+   After script is finished, it creates .txt file in %TEMP% with results and opens it in Notepad.
+   Also, produced code is copied to Clipboard.
+#>
+[CmdLetBinding(DefaultParameterSetName = 'Text')]
+Param(
+   [Parameter(Mandatory = $true,
+			  ParameterSetName='Text')]
+   [string]$RegText,
+   [Parameter(ParameterSetName='File',
+			  Mandatory = $true)]
+   [ValidateScript({Test-Path $_})]
+   [string]$FilePath
+)
+$RegistryTypes = @{ "string" = "String";
+   "hex"                     = "Binary";
+   "dword"                   = "DWord";
+   "hex(b)"                  = "QWord";
+   "hex(7)"                  = "MultiString";
+   "hex(2)"                  = "ExpandString";
+   "hex(0)"                  = "Unknown"
+}
+$RegistryHives = @{ "HKEY_LOCAL_MACHINE\\" = "HKLM:";
+   "HKEY_CURRENT_USER\\"                   = "HKCU:";
+   "HKEY_CLASSES_ROOT\\"                   = "HKCR:";
+   "HKEY_USERS\\"                          = "HKU:";
+   "HKEY_CURRENT_CONFIG\\"                 = "HKCC:"
+}
+$key = ""
+$name = ""
+$value = ""
+$type = ""
+$curvalue = ""
+$code = @()
+$code += "# Proccessed file is ""$filename"""
 
-    New-PSDrive -PSProvider registry -Root HKEY_CLASSES_ROOT -Name HKCR | Out-Null
-    New-PSDrive -PSProvider registry -Root HKEY_USERS -Name HKU | Out-Null
-    New-PSDrive -PSProvider registry -Root HKEY_CURRENT_CONFIG -Name HKCC | Out-Null
+New-PSDrive -PSProvider registry -Root HKEY_CLASSES_ROOT -Name HKCR | Out-Null
+New-PSDrive -PSProvider registry -Root HKEY_USERS -Name HKU | Out-Null
+New-PSDrive -PSProvider registry -Root HKEY_CURRENT_CONFIG -Name HKCC | Out-Null
 
-    $RegStrings = $RegData -split "`r`n"
+Try {
+   $RegStrings = if ($FilePath) { Get-Content -Path $FilePath }
+				 else { $RegText -split "`r`n" }
+
     foreach ($line in $RegStrings) {
-        if ($line.Length -gt 0) {
-            # current line has comment
-            if ($line -match '(^;)|(^Windows Registry Editor)|(^""$)' ) {
-                Continue;
+      if ($line.Length -gt 0) {
+         # current line has comment
+         if ($line -match '(^;)|(^Windows Registry Editor)' ) {
+            Continue;
+         }
+         # currrent line is a registry key
+         if ($line -match '^\[([-]*)(.+)\]$' ) {
+            $key = $matches[2]
+            $remove = $matches[1]
+            foreach ($item in $RegistryHives.Keys) {
+               if ($key -match $item) {
+                  $parentKey = $RegistryHives[$item]
+                  $subKey = $key -replace "($item)(.)", '$2'
+                  $key = $parentKey + "\" + $subKey
+               }
             }
-            # currrent line is a registry key            
-            if ($line -match '^\[([-]*)(.+)\]$' ) {
-                $key = $matches[2]
-                $remove = $matches[1]
-                foreach ($item in $RegistryHives.Keys) {
-                    if ($key -match $item) {
-                        $parentKey = $RegistryHives[$item]
-                        $subKey = $key -replace "($item)(.)", '$2'
-                        $key = $parentKey + "\" + $subKey
-                    }
-                }
-                # if registry key should be removed                    
-                if ($remove -eq '-') {
-                    $null = $code.add("(Get-Item $parentKey).DeleteSubKeyTree(`"$subKey`")")
-                }
-                else {
-                    $null = $code.add("(Get-Item $($parentKey)).CreateSubKey(`"$($subKey)`",`$true) | Out-Null")
-                }
-                Continue;
-            }
-            # current line is a pair of registry name and value
-            if ($line -match '(".+"|@)(\s*=\s*)(.+)') {
-                $subline1 = $Matches[1]
-                $subline2 = $Matches[3]
-                $name = $($subline1.Trim() -replace '(^")|("$)', '') -replace "([\\])(.)", '$2'
-                if ($name -eq "@") { $name = "" }
-                if ($line -match "[\\]$") {
-                    $curvalue += $subline2
-                    Continue
-                }
-                else { $value = $Matches[3] }
+            # if registry key should be removed
+            if ($remove -eq '-') {
+               $code += "(Get-Item $parentKey).DeleteSubKeyTree(`"$subKey`")"
             }
             else {
-                # current registry value continues on the next line
-                if ($line -match "[\\]$") {
-                    if (![string]::IsNullOrEmpty($curvalue)) {
-                        $curvalue += $line
-                        Continue
-                    }
-                }
-                else {
-                    if (![string]::IsNullOrEmpty($curvalue)) {
-                        $value = $curvalue + $line
-                        $curvalue = ""
-                    }
-                }
+               $code += "(Get-Item $($parentKey)).CreateSubKey(`"$($subKey)`",`$true) | Out-Null"
             }
-            # current registry name should be removed
-            if ($value -eq "-") {
-                $code += "(Get-Item $parentKey).OpenSubKey(`"$subKey`",`$true).DeleteValue(`"$name`")"
-                Continue;
-            }
-            # parsing registry type
-            elseif ($value -match "^((hex:)|(hex\(0\):)|(hex\(2\):)|(hex\(7\):)|(hex\(b\):)|(dword:))") {
-                $type, $value = $value -split ":", 2
-                $type = $RegistryTypes[$type]
-                if ($value -match "[\\\s +]") {
-                    $value = $value -replace "[\\\s +]", ""
-                }
-            }
-            elseif ( ($value -match '(^")') -and ($value -match '("$)')) {
-                $type = "String"
-                $value = $($value.Trim() -replace '(^")|("$)', '') -replace "([\\])(.)", '$2'
-            }
-            # processing values according to their types
-            switch ($type) {
-                "String" { $value = $value -replace '"', '""' }
-                "Binary" { $value = $value -split "," | ForEach-Object { [System.Convert]::ToInt64($_, 16) } }
-                "QWord" {
-                    $temparray = @()
-                    $temparray = $value -split ","
-                    [array]::Reverse($temparray)
-                    $value = -join $temparray
-                }
-                "MultiString" {
-                    $MultiStrings = [System.Collections.ArrayList]@()
-                    $temparray = @()
-                    $temparray = $value -split ",00,00,00,"
-                    for ($i = 0; $i -lt ($temparray.Count - 1); $i++) { 
-                        $val = ([System.Text.Encoding]::Unicode.GetString((($temparray[$i] -split ",") + "00" | ForEach-Object { [System.Convert]::ToInt64($_, 16) }))) -replace '"', '""'
-                        $null = $MultiStrings.Add( $val )
-                    }
-                    $value = $MultiStrings
-                }
-                "ExpandString" {
-                    if ($value -match "^00,00$") { $value = "" }
-                    else {
-                        $value = $value -replace ",00,00$", ""
-                        $value = [System.Text.Encoding]::Unicode.GetString((($value -split ",") | ForEach-Object { [System.Convert]::ToInt64($_, 16) }))
-                        $value = $value -replace '"', '""'
-                    }
-                }
-                "Unknown" {
-                    $null = $code.Add("# Unknown registry type is not supported [$key]\$name, type `"$type`"")
-                    Continue;                
-                }
-                     
-            }
-            $name = $name -replace '"', '""'
-            if (($type -eq "Binary") -or ($type -eq "Unknown")) {
-                $value = "@(" + ($value -join ",") + ")"
-                $null = $code.add("(Get-Item $($parentKey)).OpenSubKey(`"$($subKey)`",`$true).SetValue(`"$($name)`",[byte[]] $($value),`"$($type)`")")
-            }
-            elseif ($type -eq "MultiString") {
-                $value = "@(" + ('"' + ($value -join '","') + '"') + ")"
-                $null = $code.add("(Get-Item $($parentKey)).OpenSubKey(`"$($subKey)`",`$true).SetValue(`"$($name)`",[string[]] $($value),`"$($type)`")")
-            }    
-            elseif (($type -eq "DWord") -or ($type -eq "QWord")) {
-                $value = "0x" + $value
-                $null = $code.add("(Get-Item $($parentKey)).OpenSubKey(`"$($subKey)`",`$true).SetValue(`"$($name)`",$($value),`"$($type)`")")
+            Continue;
+         }
+         # current line is a pair of registry name and value
+         if ($line -match '(".+"|@)(\s*=\s*)(.+)') {
+            $subline1 = $Matches[1]
+            $subline2 = $Matches[3]
+            $name = $($subline1.Trim() -replace '(^")|("$)', '') -replace "([\\])(.)", '$2'
+            if ($name -eq "@") { $name = "" }
+            if ($line -match "[\\]$") {
+               $curvalue += $subline2
+               Continue;
             }
             else {
-                $null = $code.add("(Get-Item $($parentKey)).OpenSubKey(`"$($subKey)`",`$true).SetValue(`"$($name)`",`"$($value)`",`"$($type)`")")
+               $value = $Matches[3]
             }
-        }
-    }
-    $code
-    Remove-PSDrive -Name HKCR
-    Remove-PSDrive -Name HKU
-    Remove-PSDrive -Name HKCC
-} # function ConvertRegToScript
+         }
+         else {
+            # current registry value continues on the next line
+            if ($line -match "[\\]$") {
+               if (![string]::IsNullOrEmpty($curvalue)) {
+                  $curvalue += $line
+                  Continue;
+               }
+            }
+            else {
+               if (![string]::IsNullOrEmpty($curvalue)) {
+                  $value = $curvalue + $line
+                  $curvalue = ""
+               }
+            }
+         }
+         # current registry name should be removed
+         if ($value -eq "-") {
+            $code += "(Get-Item $parentKey).OpenSubKey(`"$subKey`",`$true).DeleteValue(`"$name`")"
+            Continue;
+         }
+         # parsing registry type
+         elseif ($value -match "^((hex:)|(hex\(0\):)|(hex\(2\):)|(hex\(7\):)|(hex\(b\):)|(dword:))") {
+            $type, $value = $value -split ":", 2
+            $type = $RegistryTypes[$type]
+            if ($value -match "[\\\s +]") {
+               $value = $value -replace "[\\\s +]", ""
+            }
+         }
+         elseif ( ($value -match '(^")') -and ($value -match '("$)')) {
+            $type = "String"
+            $value = $($value.Trim() -replace '(^")|("$)', '') -replace "([\\])(.)", '$2'
+         }
+         # processing values according to their types
+         switch ($type) {
+            "String" {
+               $value = $value -replace '"', '""'
+            }
+            "Binary" { $value = $value -split "," | ForEach-Object { [System.Convert]::ToInt64($_, 16) } }
+            "QWord" {
+               $temparray = @()
+               $temparray = $value -split ","
+               [array]::Reverse($temparray)
+               $value = -join $temparray
+            }
+            "MultiString" {
+               $MultiStrings = @()
+               $temparray = @()
+               $temparray = $value -split ",00,00,00,"
+               for ($i = 0; $i -lt ($temparray.Count - 1); $i++) {
+                  $MultiStrings += ([System.Text.Encoding]::Unicode.GetString((($temparray[$i] -split ",") + "00" | ForEach-Object { [System.Convert]::ToInt64($_, 16) }))) -replace '"', '""'
+               }
+               $value = $MultiStrings
+            }
+            "ExpandString" {
+               if ($value -match "^00,00$") {
+                  $value = ""
+               }
+               else {
+                  $value = $value -replace ",00,00$", ""
+                  $value = [System.Text.Encoding]::Unicode.GetString((($value -split ",") | ForEach-Object { [System.Convert]::ToInt64($_, 16) }))
+                  $value = $value -replace '"', '""'
+               }
+            }
+            "Unknown" {
+               $code += "# Unknown registry type is not supported [$key]\$name, type `"$type`""
+               Continue;
+            }
 
-function GetWorkspaces {
+         }
+         $name = $name -replace '"', '""'
+         if (($type -eq "Binary") -or ($type -eq "Unknown")) {
+            $value = "@(" + ($value -join ",") + ")"
+            $code += "(Get-Item $($parentKey)).OpenSubKey(`"$($subKey)`",`$true).SetValue(`"$($name)`",[byte[]] $($value),`"$($type)`")"
+         }
+         elseif ($type -eq "MultiString") {
+            $value = "@(" + ('"' + ($value -join '","') + '"') + ")"
+            $code += "(Get-Item $($parentKey)).OpenSubKey(`"$($subKey)`",`$true).SetValue(`"$($name)`",[string[]] $($value),`"$($type)`")"
+         }
+         elseif (($type -eq "DWord") -or ($type -eq "QWord")) {
+            $value = "0x" + $value
+            $code += "(Get-Item $($parentKey)).OpenSubKey(`"$($subKey)`",`$true).SetValue(`"$($name)`",$($value),`"$($type)`")"
+         }
+         else {
+            $code += "(Get-Item $($parentKey)).OpenSubKey(`"$($subKey)`",`$true).SetValue(`"$($name)`",`"$($value)`",`"$($type)`")"
+         }
+      }
+   }
+   Write-Output $code
+   Remove-PSDrive -Name HKCR
+   Remove-PSDrive -Name HKU
+   Remove-PSDrive -Name HKCC
+}
+catch { $_.Exception.Message }
+} # function Convert-RegToScript
+
+function _getSecureArea {
     [CmdletBinding()]
-    param(
-        [xml]$XmlData
-    )
-    $workspaces = $XmlData.respowerfuse.buildingblock.workspaces.workspace
-    
-    foreach ($workspace in $workspaces) {
+    param($SecureArea)
+
+    foreach ($Area in $SecureArea) {
         [PsCustomObject]@{
-            'Name'    = $workspace.name
-            'Guid'    = $workspace.guid
-            'Enabled' = $workspace.enabled
+            'Name'    = $Area.name
+            'Guid'    = $Area.guid
+            'Enabled' = $Area.enabled
         }
     }
-} # function GetWorkspaces
+} # function _getSecureArea
 
-function GetPowerzones {
-    [CmdletBinding()]
-    param(
-        [xml]$XmlData
-    )
-    $workspaces = $XmlData.respowerfuse.buildingblock.powerzones.powerzone
-    
-    foreach ($workspace in $workspaces) {
-        [PsCustomObject]@{
-            'Name'    = $workspace.name
-            'Guid'    = $workspace.guid
-            'Enabled' = $workspace.enabled
-        }
-    }
-} # function GetPowerzones
-
-function GetAccessControls {
+function _getAccessControl {
     param(
         $Target
     )
     $AccessList = [System.Collections.ArrayList]@()
     $AccessControl = $Target.accesscontrol
-    if ($AccessControl.accesstype -eq 'group') { 
+    if ($AccessControl.accesstype -eq 'group') {
         foreach ($group in $AccessControl.grouplist.group) {
             $AccessOptions = @()
             if ($null -ne $group.type) { $AccessOptions += $group.type }
@@ -487,24 +519,24 @@ function GetAccessControls {
             if ($null -ne $subnode.options) { $AccessOptions += $subnode.options }
             if ($null -ne $subnode.type) { $AccessOptions += $subnode.type.ToUpper() }
             if ($null -ne $subnode.object) {
-                if ($subnode.type -eq 'powerzone') { 
-                    $Name = $Powerzones | Foreach-Object { 
-                        if ($_.Guid -eq $subnode.object) { $_.Name } } 
+                if ($subnode.type -eq 'powerzone') {
+                    $Name = $Powerzones | Foreach-Object {
+                        if ($_.Guid -eq $subnode.object) { $_.Name } }
                     }
                 else {
                     $Name = $subnode.object
                 }
-                $AccessOptions += $Name 
+                $AccessOptions += $Name
             }
             $null = $AccessList.Add("$AccessOptions")
         }
     }
     Write-Output $AccessList
-} # function GetAccessControls
+} # function _getAccessControl
 
-function MakeResScript {
+function _makeResScript {
     param($script)
-        
+
     $ScriptCommand = ''
 
     if ($null -ne $script.Workspace) { $WorkspaceText = "    # Workspace: $($script.Workspace)`n" }
@@ -516,7 +548,7 @@ function MakeResScript {
     if ($script.AccessInfo.Count -ne 0) {
         $AccessInfoText = ""
         foreach ($AccessInfo in $script.AccessInfo) {
-            $AccessInfoText += "# $AccessInfo`n"
+            $AccessInfoText += "    # $AccessInfo`n"
         }
     }
     else {
@@ -529,18 +561,22 @@ function MakeResScript {
         $ScriptCommand += "    # Script was disabled!!!`n"
     }
     else { $strStart = '' }
-    if (($script.Type -ne 'ps1')) {
+
+	if (($script.Type -ne 'ps1')) {
         $strStart = '# '
     }
-    $ScriptCommand += "    # Command: $($script.Command) `n"  
+
+	$ScriptCommand += "    # Command: $($script.Command) `n"
     $lines = $script.Text -split "`n"
-    foreach ($scriptText in $lines) {
+
+	foreach ($scriptText in $lines) {
         $ScriptCommand += "    ${strStart}${scriptText} `n"
     } #foreach $scriptText
-    Write-Output $ScriptCommand
-} # function MakeResScript
 
-function MakeShortcutScript {
+	Write-Output $ScriptCommand
+} # function _makeResScript
+
+function _makeShortcutScript {
     [CmdletBinding()]
     param( [PsCustomObject]$ResObject )
     BEGIN { } #BEGIN
@@ -548,65 +584,71 @@ function MakeShortcutScript {
         $ScriptTemplate = $script:ScriptTemplate
         $LinkedScriptTemplate = $script:LinkedScriptTemplate
 
-        foreach ($ResEntry in $ResObject) {
+        foreach ($resobject in $ResObject) {
             $Target = ''
             $Arguments = ''
             $WorkingDir = ''
             $AppInfo = ''
             if ($ResObject.IsShortcut -eq $True) {
-                    
-                if (($ResEntry.InStartMenu -eq 'no') -or ($ResEntry.IsEnabled -eq 'no')) {
+
+                if (($resobject.InStartMenu -eq 'no') -or ($resobject.IsEnabled -eq 'no')) {
                     $AppInfo += "    # StartMenu shortcut was disabled!!!`n"
                 }
 
                 $Target = [system.environment]::ExpandEnvironmentVariables("$($ResObject.Target)")
                 $Arguments = [system.environment]::ExpandEnvironmentVariables("$($ResObject.Arguments)")
                 $WorkingDir = [system.environment]::ExpandEnvironmentVariables("$($ResObject.WorkingDir)")
-                # insert path to executable
+                # add path to executable
                 $StartApp = $script:StartApp
                 $StartApp = $StartApp.Replace('<PATHTOAPP>', $Target)
-                
-                # insert arguments
+
+                # add arguments
                 if ('' -ne $ResObject.Arguments) {
                     $AppArgs = " -ArgumentList `"$Arguments`""
                 }
                 else { $AppArgs = '' }
                 $StartApp = $StartApp.Replace('<ARGS>', $AppArgs)
-    
-                # insert working directory
+
+                # add working directory
                 if ('' -ne $ResObject.WorkingDir) {
                     $AppArgs = " -WorkingDirectory `"$WorkingDir`""
                 }
                 else { $AppArgs = '' }
                 $StartApp = $StartApp.Replace('<WKDIR>', $AppArgs)
-                    
+
                 $ScriptBody = $ScriptTemplate
                 $ScriptBody = $ScriptBody.Replace('<STARTAPP>', $StartApp)
-            } 
+            }
             else {
                 $ScriptBody = $LinkedScriptTemplate
             }
 
-            # insert info
-            if ($ResEntry.AccessInfo.Count -ne 0) {
-                foreach ($AccessInfo in $ResEntry.AccessInfo) {
+            # add security info
+            if ($resobject.AccessInfo.Count -ne 0) {
+                foreach ($AccessInfo in $resobject.AccessInfo) {
                     $AppInfo += "    # $AccessInfo`n"
                 }
             }
-                
-            # insert linked actipns
+
+			# add fta info
+			if ($resobject.FTA.Count -ne 0) {
+				$ExtensionsForOpen = ($resobject.FTA | Where-Object {$_.command -eq 'open'}).extension  -join ', '
+				$AppInfo += "    # Extensions registered for open: $ExtensionsForOpen`n"
+			}
+
+            # add linked actions
             $LinkedScripts = ''
-            if ($null -ne $($ResEntry.LinkedApps)) {
-                foreach ($LinkedApp in $ResEntry.LinkedApps) { 
+            if ($null -ne $($resobject.LinkedApps)) {
+                foreach ($LinkedApp in $resobject.LinkedApps) {
                     $LinkedScripts += "    . `"`$PsScriptRoot\__$LinkedApp.ps1`"`n`n"
                 } # foreach $LinkedApp
                 $LinkedScripts = "$LinkedScripts`n"
-            } #if $ResEntry
+            } #if $resobject
 
-            # insert environment variables
+            # add environment variables
             $EnvVarCommand = ''
-            if ($null -ne $($ResEntry.Variables)) {
-                foreach ($var in $ResEntry.Variables) {
+            if ($null -ne $($resobject.Variables)) {
+                foreach ($var in $resobject.Variables) {
                     if ($null -ne $var.description) { $DescriptionText = "    # Description: $($var.description)`n" }
                     else { $DescriptionText = '' }
 
@@ -622,28 +664,28 @@ function MakeShortcutScript {
                     else {
                         $AccessInfoText = ''
                     }
-                        
+
                     $EnvVarCommand = $EnvVarCommand + $DescriptionText + $WorkspaceText + $AccessInfoText
-                        
+
                     if ($var.Enabled -ne 'yes') {
                         $strStart = '# '
                         $EnvVarCommand += "    # Environment variable was disabled!!! `n"
                     }
                     else { $strStart = '' }
-                        
+
                     $EnvVarCommand += "    ${strStart}`$EnvName  = '$($var.Name)' `n"
                     $EnvVarCommand += "    ${strStart}`$EnvValue = '$($var.Value)' `n"
                     $EnvVarCommand += "    ${strStart}[System.Environment]::SetEnvironmentVariable(`$EnvName, `$EnvValue, `"User`") `n"
                     $EnvVarCommand += "    ${strStart}[System.Environment]::SetEnvironmentVariable(`$EnvName, `$EnvValue, `"Process`")`n"
                     $EnvVarCommand = "$EnvVarCommand`n"
                 } # foreach $var
-            } # if $ResEntry.Variables
+            } # if $resobject.Variables
 
-            # insert registry
+            # add registry
             $RegistryCommand = ''
-            if ($null -ne $($ResEntry.Registry)) {
-                foreach ($RegEntry in $ResEntry.Registry) { 
-                        
+            if ($null -ne $($resobject.Registry)) {
+                foreach ($RegEntry in $resobject.Registry) {
+
                     if ($null -ne $RegEntry.Workspace) { $WorkspaceText = "    # Workspace: $($RegEntry.Workspace)`n" }
                     else { $WorkspaceText = '' }
 
@@ -666,31 +708,31 @@ function MakeShortcutScript {
                         $RegistryCommand += "    # Registry was disabled!!! `n"
                     }
                     else { $strStart = '' }
-                    foreach ($regString in (ConvertRegToScript -RegData $RegEntry.regText)) {
+                    foreach ($regString in (Convert-RegToScript -RegText $RegEntry.regText)) {
                         $RegistryCommand += "    ${strStart}${regString} `n"
                     } # foreach $regString
                     $RegistryCommand = "$RegistryCommand`n"
                 } # foreach $RegEntry
-            } #if $ResEntry
-                
-            # insert scripts
+            } #if $resobject
+
+            # add scripts
             $ScriptCommand = ''
-            if ($null -ne $($ResEntry.Scripts)) {
-                foreach ($script in $ResEntry.Scripts) {
-                    $ScriptCommand += MakeResScript -script $script
+            if ($null -ne $($resobject.Scripts)) {
+                foreach ($script in $resobject.Scripts) {
+                    $ScriptCommand += _makeResScript -script $script
                     $ScriptCommand = "$ScriptCommand`n"
                 } # foreach $ResScript
-            } # if $ResEntry.Scripts
+            } # if $resobject.Scripts
 
-            if ($null -ne $($ResEntry.CloseScripts)) {
-                foreach ($script in $ResEntry.CloseScripts) {
+            if ($null -ne $($resobject.CloseScripts)) {
+                foreach ($script in $resobject.CloseScripts) {
                     $ScriptCommand += "    # Action on app close!!!`n"
-                    $ScriptCommand += MakeResScript -script $script
+                    $ScriptCommand += _makeResScript -script $script
                     $ScriptCommand = "$ScriptCommand`n"
                 } # foreach $ResScript
-            } # if $ResEntry.Scripts
+            } # if $resobject.Scripts
 
-        } #foreach ResEntry
+        } #foreach resobject
 
         $ScriptBody = $ScriptBody.Replace('<INFO>', $AppInfo)
         $ScriptBody = $ScriptBody.Replace('<LINKEDAPPS>', $LinkedScripts)
@@ -701,7 +743,7 @@ function MakeShortcutScript {
         $ScriptBody
     } #PROCESS
     END { } #END
-} #function MakeShortcutScript
+} #function _makeShortcutScript
 }
 PROCESS {
 foreach ($file in $Path) {
@@ -710,57 +752,58 @@ foreach ($file in $Path) {
 		$file = (resolve-path -Path $file).Path
 
 		Write-Verbose "Parse file:`t$file"
-		[xml]$BuildingBlock = Get-Content -Path $file
-		
-		$Workspaces = GetWorkspaces -XmlData $BuildingBlock
-		$PowerZones = GetPowerzones -XmlData $BuildingBlock
-		$ResData = ConvertResExport -XmlData $BuildingBlock
-			
+		[xml]$XmlData = Get-Content -Path $file
+
+		$Workspaces = _getSecureArea -SecureArea $XmlData.respowerfuse.buildingblock.workspaces.workspace
+		$PowerZones = _getSecureArea -SecureArea $XmlData.respowerfuse.buildingblock.powerzones.powerzone
+		$ResObjects = _convertXmlToObj -XmlData $XmlData
+
 		if (Test-Path $OutputDir) {} else { $null = New-Item -Path $OutputDir -ItemType Directory }
 
-		foreach ($ResObj in $ResData) {
+		foreach ($resobject in $ResObjects) {
 			# Check that object is not empty to avoid empty scipts:
-			$IsEmpty = ($($ResObj.IsShortcut) -eq $false) -and
-					   ($null -eq $($ResObj.Scripts)) -and
-					   ($null -eq $($ResObj.CloseScripts)) -and
-					   ($null -eq $($ResObj.Variables)) -and
-					   ($null -eq $($ResObj.Registry)) -and
-					   ($null -eq $($ResObj.FTA)) -and
-					   ($null -eq $($ResObj.LinkedApps))
-				
+			$IsEmpty = ($($resobject.IsShortcut) -eq $false) -and
+					   ($null -eq $($resobject.Scripts)) -and
+					   ($null -eq $($resobject.CloseScripts)) -and
+					   ($null -eq $($resobject.Variables)) -and
+					   ($null -eq $($resobject.Registry)) -and
+					   ($null -eq $($resobject.FTA)) -and
+					   ($null -eq $($resobject.LinkedApps))
+
 			if ( $IsEmpty ) {
-				Write-Verbose "Res Object is empty:`t$($ResObj.Description)"
+				Write-Verbose "Res Object is empty:`t$($resobject.Description)"
 				continue
 			}
-			
+
 			$FileNamePrefix = ''
-				
-			if ($ResObj.IsShortcut -eq $false) {
+
+			if ($resobject.IsShortcut -eq $false) {
 				$FileNamePrefix = '__'
 			}
 
-			if ($null -eq $ResObj.Name) {
+			if ($null -eq $resobject.Name) {
 				$FileName = (Get-Item $file).BaseName
 			}
-			else { $FileName = $ResObj.Name }
+			else { $FileName = $resobject.Name }
 			$FileName = "$FileNamePrefix$FileName.ps1"
             $FilePath = "$OutputDir\$FileName"
-				
+
+			if ( !$Silent ) {
+				$resobject | Add-Member -MemberType 'NoteProperty' -Name 'FilePath' -Value $FilePath
+				Write-Output $resobject
+			}
+
 			if ( (Test-Path $FilePath) -and !$Force) {
-				
+
                 Write-Verbose "File already exists:`t${FileName}"
 				continue
 			}
-			
-			$ShortcutScript = MakeShortcutScript -ResObject $ResObj
+
+			$ShortcutScript = _makeShortcutScript -ResObject $resobject
 
 			$null = New-Item -Path $FilePath -ItemType File -Value $ShortcutScript -Force:$Force
 			Write-Verbose "New script was created:`t${FileName}"
-
-			if ( $PassThru -and ($null -ne $_.ESNumber) ) { 
-				$ResObj | Select-Object ESNumber, Name
-			}
-		} #foreach $ResObj
+		} #foreach $resobject
 	} #foreach $file
 }
 END{}
